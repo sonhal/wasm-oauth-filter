@@ -32,7 +32,7 @@ jobs:
       run: make build-image # -e IMAGE=${IMAGE}
     - name: "Push WASM OCI image"
       run: |
-        wasme login -u ${WASME_USERNAME} -p ${WASME_PASSWORD}
+        "wasme login -u ${WASME_USERNAME} -p ${WASME_PASSWORD}"
         make push-image
       env:
         "WASME_USERNAME": "${{ secrets.WASME_USERNAME }}"
