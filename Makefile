@@ -18,5 +18,8 @@ deploy-envoy:
 push-image:
 	wasme push $(IMAGE)
 
+wasme-login:
+	wasme login -u $(WASME_USERNAME) -p $(WASME_PASSWORD)
+
 clean:
 	cargo clean
