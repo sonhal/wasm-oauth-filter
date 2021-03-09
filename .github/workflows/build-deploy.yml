@@ -28,13 +28,12 @@ jobs:
         make release
     - name: Run tests
       run: "echo TODO make tests work" #cargo test --verbose
-
     - name: "Build WASM OCI image"
       run: make build-image # -e IMAGE=${IMAGE}
     - name: "Push WASM OCI image"
       run: |
         "wasme login -u $WASME_USERNAME -p $WASME_PASSWORD"
-        wasme push ${IMAGE}
+        make push-image
       env:
         "WASME_USERNAME": "${{ secrets.WASME_USERNAME }}"
         "WASME_PASSWORD": "${{ secrets.WASME_PASSWORD }}"
