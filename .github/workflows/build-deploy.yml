@@ -28,12 +28,7 @@ jobs:
         make release
     - name: Run tests
       run: "echo TODO make tests work" #cargo test --verbose
-    - name: "Set image version"
-      id: set-image-tag
-      run: |
-        export IMAGE="${BASEIMAGE}:$(date +%Y%m%d%H%M%S)"
-        echo "IMAGE=${IMAGE}" >> $GITHUB_ENV
-        echo "::set-output name=IMAGE::${IMAGE}"
+
     - name: "Build WASM OCI image"
       run: make build-image # -e IMAGE=${IMAGE}
     - name: "Push WASM OCI image"
