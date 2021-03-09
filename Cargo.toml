@@ -1,5 +1,5 @@
 [package]
-name = "oicd-plugin"
+name = "authn-filter"
 version = "0.1.0"
 authors = ["Sondre"]
 edition = "2018"
