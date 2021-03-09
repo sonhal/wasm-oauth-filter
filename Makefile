@@ -2,7 +2,7 @@
 
 FILTER_NAME=authn_filter
 FILTER_TAG=v0.1
-IMAGE ?= webassemblyhub.io/thesisworker/$(FILTER_TAG):$(FILTER_TAG)
+IMAGE ?= webassemblyhub.io/thesisworker/$(FILTER_NAME):$(FILTER_TAG)
 
 release:
 	cargo build --target wasm32-unknown-unknown --release
