@@ -34,7 +34,7 @@ jobs:
         echo "IMAGE=${IMAGE}" >> $GITHUB_ENV
         echo "::set-output name=IMAGE::${IMAGE}"
     - name: "Build WASM OCI image"
-      run: ~/.wasme/bin/wasme build precompiled /home/runner/work/wasm-auth-filter/wasm-auth-filter/target/wasm32-unknown-unknown/release/authn-filter.wasm --tag ${IMAGE}
+      run: ~/.wasme/bin/wasme build precompiled target/wasm32-unknown-unknown/release/authn_filter.wasm --tag ${IMAGE}
     - name: "Push WASM OCI image"
       run: |
         "~/.wasme/bin/wasme login -u $WASME_USERNAME -p $WASME_PASSWORD"
