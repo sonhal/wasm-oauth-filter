@@ -31,7 +31,7 @@ jobs:
     - name: "Set image version"
       id: set-image-tag
       run: |
-        export IMAGE="${BASEIMAGE}:$(date +%Y%m%d%H%M%S)-$(git describe --always --dirty --exclude '*')"
+        export IMAGE="${BASEIMAGE}:$(date +%Y%m%d%H%M%S)"
         echo "IMAGE=${IMAGE}" >> $GITHUB_ENV
         echo "::set-output name=IMAGE::${IMAGE}"
     - name: "Build WASM OCI image"
