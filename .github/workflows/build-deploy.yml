@@ -20,11 +20,12 @@ jobs:
     - name: "Install WASME"
       run: |
         curl -sL https://run.solo.io/wasme/install | sh
+        echo "$HOME/.wasme/bin/" >> $GITHUB_PATH
     - name: Build
       run: |
         rustup update
         rustup target add wasm32-unknown-unknown
-        cargo build --target wasm32-unknown-unknown --release --verbose
+        make release
     - name: Run tests
       run: "echo TODO make tests work" #cargo test --verbose
     - name: "Set image version"
@@ -34,10 +35,10 @@ jobs:
         echo "IMAGE=${IMAGE}" >> $GITHUB_ENV
         echo "::set-output name=IMAGE::${IMAGE}"
     - name: "Build WASM OCI image"
-      run: ~/.wasme/bin/wasme build precompiled target/wasm32-unknown-unknown/release/authn_filter.wasm --tag ${IMAGE}
+      run: make build-image -e IMAGE=${IMAGE}
     - name: "Push WASM OCI image"
       run: |
-        "~/.wasme/bin/wasme login -u $WASME_USERNAME -p $WASME_PASSWORD"
+        "wasme login -u $WASME_USERNAME -p $WASME_PASSWORD"
         wasme push ${IMAGE}
       env:
         "WASME_USERNAME": "${{ secrets.WASME_USERNAME }}"
