@@ -8,6 +8,7 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  "BASEIMAGE": "webassemblyhub.io/thesisworker/"
 
 jobs:
   build:
@@ -23,20 +24,21 @@ jobs:
       run: |
         rustup update
         rustup target add wasm32-unknown-unknown
-        cargo build --verbose
+        cargo build --target wasm32-unknown-unknown --release --verbose
     - name: Run tests
       run: cargo test --verbose
     - name: "Set image version"
       id: set-image-tag
       run: |
-        export FILTER_NAME="${BASEIMAGE}:$(date +%Y%m%d%H%M%S)-$(git describe --always --dirty --exclude '*')"
-        echo "FILTER_NAME=${FILTER_NAME}" >> $GITHUB_ENV
-        echo "::set-output name=FILTER_NAME::${FILTER_NAME}"
+        export IMAGE="${BASEIMAGE}:$(date +%Y%m%d%H%M%S)-$(git describe --always --dirty --exclude '*')"
+        echo "IMAGE=${IMAGE}" >> $GITHUB_ENV
+        echo "::set-output name=IMAGE::${IMAGE}"
     - name: "Build WASM OCI image"
-      run: make build-image
+      run: wasme build precompiled target/wasm32-unknown-unknown/release/authn-filter.wasm --tag $(IMAGE)
     - name: "Push WASM OCI image"
       run: |
         "~/.wasme/bin/wasme login -u $WASME_USERNAME -p $WASME_PASSWORD"
+        wasme push $(IMAGE)
       env:
         "WASME_USERNAME": "${{ secrets.WASME_USERNAME }}"
         "WASME_PASSWORD": "${{ secrets.WASME_PASSWORD }}"
