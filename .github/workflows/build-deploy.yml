@@ -35,7 +35,7 @@ jobs:
         echo "IMAGE=${IMAGE}" >> $GITHUB_ENV
         echo "::set-output name=IMAGE::${IMAGE}"
     - name: "Build WASM OCI image"
-      run: make build-image -e IMAGE=${IMAGE}
+      run: make build-image # -e IMAGE=${IMAGE}
     - name: "Push WASM OCI image"
       run: |
         "wasme login -u $WASME_USERNAME -p $WASME_PASSWORD"
