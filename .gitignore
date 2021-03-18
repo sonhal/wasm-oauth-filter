@@ -11,7 +11,7 @@ target/
 **/*.rs.bk
 
 # bazel
-bazel-bin
-bazel-out
-bazel-testlogs
-bazel-workspace
+bazel/bazel-bin
+bazel/bazel-out
+bazel/bazel-testlogs
+bazel/bazel-workspace

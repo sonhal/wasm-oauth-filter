@@ -1,0 +1,50 @@
+version: '3'
+
+services:
+  proxy:
+    build: .
+    volumes:
+      - ./envoy-bootstrap-static-loading.yaml:/etc/envoy.yaml
+      - ../target/wasm32-unknown-unknown/release/authn_filter.wasm:/etc/oicd-filter.wasm
+      # Uncomment this line if you want to use your own Envoy with WASM enabled.
+    #    - ./envoy/istio/envoy:/usr/local/bin/envoy
+    ports:
+      - "10000:10000"
+      - "19901:9901"
+  mock-oauth2-server:
+    image: mock-oauth2-server:0.3-SNAPSHOT
+    ports:
+      - 8888:8080
+    environment:
+      JSON_CONFIG_PATH: "/var/mock-auth2-config.json"
+    volumes:
+      - ./mock-auth2-config.json:/var/mock-auth2-config.json
+  token-tester:
+    image: ghcr.io/sonhal/token-tester:latest
+    ports:
+      - 8080:8080
+    environment:
+      PORT: 8080
+      ISSUER_NAME: customiss
+      OIDC_DISCOVERY_URL: http://mock-oauth2-server:8080/customiss/.well-known/openid-configuration
+      OIDC_ACCEPTED_AUDIENCE: aud-token-tester
+    restart: always
+    depends_on:
+      - mock-oauth2-server
+
+  tool:
+    image: praqma/network-multitool
+    depends_on:
+      - mock-oauth2-server
+      - token-tester
+#  keycloak:
+#    image: quay.io/keycloak/keycloak:latest
+#    environment:
+#      KEYCLOAK_USER: admin
+#      KEYCLOAK_PASSWORD: admin
+#      KEYCLOAK_FRONTEND_URL: "http://localhost:8888/auth"
+#    ports:
+#      - 8888:8080
+#    restart: always
+##    volumes:
+##      - ./keycloak/oicd-test-setup.sh:/opt/jboss/startup-scripts/oicd-test-setup.sh

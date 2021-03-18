@@ -13,7 +13,7 @@ build-image:
 build-release-image: release build-image
 
 deploy-envoy:
-	wasme deploy envoy $(IMAGE) --envoy-image=istio/proxyv2:1.5.1 --bootstrap=envoy-bootstrap.yml
+	wasme deploy envoy $(IMAGE) --envoy-image=envoyproxy/envoy:v1.17-latest  --bootstrap=envoy-bootstrap-new.yml
 
 push-image:
 	wasme push $(IMAGE)
