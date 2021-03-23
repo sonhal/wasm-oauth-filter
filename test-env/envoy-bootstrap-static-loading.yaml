@@ -35,6 +35,18 @@ static_resources:
                       config:
                         name: "oicd-filter"
                         root_id: "oicd-filter"
+                        configuration:
+                          "@type": "type.googleapis.com/google.protobuf.StringValue"
+                          value: |
+                            {
+                              "redirect_uri": "/callback",
+                              "auth_cluster": "cluster_mock_auth",
+                              "auth_host": "oauth2.googleapis.com",
+                              "token_uri": "/token",
+                              "login_uri": "http://localhost:8888/customiss/auth",
+                              "client_id": "mycoolclientid",
+                              "client_secret": "mycoolclientsecret"
+                            }
                         vm_config:
                           runtime: "envoy.wasm.runtime.v8"
                           code:
@@ -43,6 +55,19 @@ static_resources:
                           allow_precompiled: true
                   - name: envoy.filters.http.router
   clusters:
+    - name: cluster_mock_auth
+      connect_timeout: 1s
+      type: STRICT_DNS
+      lb_policy: ROUND_ROBIN
+      load_assignment:
+        cluster_name: cluster_mock_auth
+        endpoints:
+          - lb_endpoints:
+              - endpoint:
+                  address:
+                    socket_address:
+                      address: mock-oauth2-server
+                      port_value: 8080
     - name: some_service
       connect_timeout: 0.25s
       type: STATIC

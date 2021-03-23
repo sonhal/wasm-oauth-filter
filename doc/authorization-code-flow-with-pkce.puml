@@ -1,0 +1,34 @@
+
+@startuml component
+actor enduser as "End user"
+participant envoy as "Envoy (with WASM oicd filter)"
+participant API1 as "Application"
+participant idprovider as "ID-provider\n"
+database cache as "Session Cache"
+
+
+== Open ID Authorization Code flow with PKCE by proxy ==
+group OpenID Connect Login with Envoy proxy
+enduser -> envoy: Request Resource
+envoy -> enduser: Redirect to ID provider with params in url
+
+enduser->idprovider: GET /authorize\n?response_type code\n&client_id=1234\nredirect_uri=https://myapp/callback\n&scope=openid\n&state=abc\n&nonce=123\n&code_challenge=elUXu5
+activate idprovider
+enduser->idprovider: Authentication
+enduser->idprovider: End user accept authorization of Client
+idprovider->enduser: Callback(POST) / redirect(GET) \nmed authorization_code
+deactivate idprovider
+
+enduser->envoy: Sender authorization code\ntil definert callback f.eks. /callback
+activate envoy
+envoy->idprovider: POST /oauth2/v2.0/token \nmed authorization_code, \nclient_id og client_secret/client_assertion
+activate idprovider
+idprovider->envoy: Returnerer id_token, \naccess_token og eventuelt \nrefresh_token
+deactivate idprovider
+envoy->envoy: Valider id_token\niht OpenID Connect
+envoy->cache: Larger sessionen i cache
+envoy->enduser: redirect med cookie(s) (id_token, session?)
+deactivate envoy
+end
+
+@enduml
