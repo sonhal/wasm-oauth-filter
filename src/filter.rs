@@ -11,6 +11,9 @@ use std::time::Duration;
 use std::any::Any;
 use serde::{Serialize, Deserialize};
 use proxy_wasm::types::LogLevel::Info;
+use std::collections::HashMap;
+use std::iter::{FromIterator, Map};
+
 
 #[no_mangle]
 pub fn _start() {
@@ -54,6 +57,21 @@ impl OAuthFilter {
       debug!("auth: allowed");
       self.send_http_response(403, vec![], Some(b"not authorized"));
     }
+
+    fn token_header(&self) -> Option<String> {
+        self.get_http_request_header(self.config.target_header_name.as_str())
+    }
+
+    fn session_cookie(&self) -> Option<String> {
+        self.get_http_request_header(self.config.cookie_name.as_str())
+    }
+
+    fn send_authorization_redirect(&self, extra_headers: Vec<(&str, &str)>) {
+
+        let mut headers = vec![("Location", self.config.redirect_uri.as_str())];
+        headers.append(&mut extra_headers.clone());
+        self.send_http_response(302, headers, None);
+    }
 }
 
 // Implement http functions related to this request.
@@ -62,12 +80,11 @@ impl HttpContext for OAuthFilter {
 
     // This callback will be invoked when request headers arrive
     fn on_http_request_headers(&mut self, num_headers: usize) -> Action {
-        // get all the request headers
-        let headers = self.get_http_request_headers();
-        log(LogLevel::Info, "Got some {} HTTP headers in {}.");
-        log(LogLevel::Info, format!("OAuth filter is configured with: {:?}", self.config).as_str());
 
-        self.send_http_response(302, vec![("Location", "https://www.vg.no")], Some(b"redirect"));
+        if let None = self.session_cookie() {
+            self.send_authorization_redirect(vec![(self.config.cookie_name.as_str(), "RandomCookieValue")])
+        }
+
         Action::Pause
     }
 
@@ -97,7 +114,11 @@ impl RootContext for OAuthRootContext {
 
     fn create_http_context(&self, _context_id: u32) -> Option<Box<dyn HttpContext>> {
         match self.config.as_ref() {
-            None => None,
+            None => {
+                log(LogLevel::Error,
+                    "No configuration supplied, cannot create HttpContext");
+                None
+            },
             Some(filter_config) => {
                 Some(Box::new(OAuthFilter{
                     config: filter_config.clone()
@@ -121,5 +142,5 @@ fn default_oidc_cookie_name() -> String {
 }
 
 fn default_target_header_name() -> String {
-    "authorization".to_owned()
+    "Authorization".to_owned()
 }

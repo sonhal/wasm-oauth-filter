@@ -39,10 +39,10 @@ static_resources:
                           "@type": "type.googleapis.com/google.protobuf.StringValue"
                           value: |
                             {
-                              "redirect_uri": "/callback",
+                              "redirect_uri": "http://localhost:8888/customiss/authorize",
                               "auth_cluster": "cluster_mock_auth",
-                              "auth_host": "oauth2.googleapis.com",
-                              "token_uri": "/token",
+                              "auth_host": "http://localhost:8888/customiss",
+                              "token_uri": "http://localhost:8888/customiss/token",
                               "login_uri": "http://localhost:8888/customiss/auth",
                               "client_id": "mycoolclientid",
                               "client_secret": "mycoolclientsecret"
