@@ -15,13 +15,16 @@ use std::collections::HashMap;
 use std::iter::{FromIterator, Map};
 use url;
 use oauth2::basic::BasicClient;
-use oauth2::{ClientId, ClientSecret, AuthUrl, TokenUrl, RedirectUrl};
+use oauth2::{ClientId, ClientSecret, AuthUrl, TokenUrl, RedirectUrl, PkceCodeChallenge, CsrfToken, Scope, PkceCodeVerifier};
 use oauth2::url::ParseError;
+use base64;
+
+#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+use getrandom::getrandom;
 
 #[no_mangle]
 pub fn _start() {
     proxy_wasm::set_log_level(LogLevel::Debug);
-
     proxy_wasm::set_root_context(
         |_| -> Box<dyn RootContext> {
             Box::new(OAuthRootContext {
@@ -102,8 +105,38 @@ impl OAuthFilter {
         }
     }
 
+    pub fn new_random_verifier(num_bytes: u32) -> PkceCodeVerifier {
+        let random_bytes: Vec<u8> = (0..num_bytes).map(|_| {
+            let mut buf = [0u8; 1];
+            getrandom(&mut buf).unwrap();
+            buf[0]
+        }).collect();
+        PkceCodeVerifier::new(base64::encode_config(
+            &random_bytes,
+            base64::URL_SAFE_NO_PAD,
+        ))
+    }
+
     fn send_authorization_redirect(&self, extra_headers: Vec<(&str, &str)>) {
-        //self.send_http_response(302, headers, None);
+        // TODO cache verifier for use in the token call
+        let pkce_challenge= PkceCodeChallenge::from_code_verifier_sha256(&OAuthFilter::new_random_verifier(32));
+
+        let (auth_url, csrf_token) = self.client
+            .authorize_url(|| CsrfToken::new("state123".to_string()))
+            // Set the desired scopes.
+            .add_scope(Scope::new("openid".to_string()))
+            // Set the PKCE code challenge.
+            .set_pkce_challenge(pkce_challenge)
+            .url();
+
+        self.send_http_response(
+            302,
+            vec![
+                ("Location", auth_url.as_str()),
+                ("Set-Cookie", format!("{}={};Max-Age=300", self.config.cookie_name, "RandomCookieValue").as_str())
+            ],
+            None
+        );
     }
 }
 

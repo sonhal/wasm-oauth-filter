@@ -5,7 +5,7 @@ services:
     build: .
     volumes:
       - ./envoy-bootstrap-static-loading.yaml:/etc/envoy.yaml
-      - ../target/wasm32-unknown-unknown/release/authn_filter.wasm:/etc/oicd-filter.wasm
+      - ../target/wasm32-wasi/release/authn_filter.wasm:/etc/oicd-filter.wasm
     ports:
       - 8090:10000
       - 19901:9901
