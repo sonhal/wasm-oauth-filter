@@ -13,7 +13,10 @@ use serde::{Serialize, Deserialize};
 use proxy_wasm::types::LogLevel::Info;
 use std::collections::HashMap;
 use std::iter::{FromIterator, Map};
-
+use url;
+use oauth2::basic::BasicClient;
+use oauth2::{ClientId, ClientSecret, AuthUrl, TokenUrl, RedirectUrl};
+use oauth2::url::ParseError;
 
 #[no_mangle]
 pub fn _start() {
@@ -32,7 +35,8 @@ struct OAuthRootContext {
 }
 
 struct OAuthFilter {
-    config: FilterConfig
+    config: FilterConfig,
+    client: BasicClient,
 }
 
 
@@ -45,14 +49,30 @@ struct FilterConfig {
     #[serde(default = "default_oidc_cookie_name")]
     cookie_name: String,
     auth_cluster: String,
-    auth_host: String,
-    login_uri: String,
+    issuer: String,
+    auth_uri: String,
     token_uri: String,
     client_id: String,
     client_secret: String
 }
 
 impl OAuthFilter {
+
+    fn new(config: FilterConfig) -> Result<OAuthFilter, ParseError> {
+        let client =
+            BasicClient::new(
+                ClientId::new(config.client_id.clone()),
+                Some(ClientSecret::new(config.client_secret.clone())),
+                AuthUrl::new(config.auth_uri.clone())?,
+                Some(TokenUrl::new(config.token_uri.clone())?)
+            )
+                .set_redirect_url(RedirectUrl::new(config.redirect_uri.clone())?);
+        Ok(OAuthFilter {
+            config,
+            client,
+        })
+    }
+
     fn fail(&mut self) {
       debug!("auth: allowed");
       self.send_http_response(403, vec![], Some(b"not authorized"));
@@ -63,14 +83,27 @@ impl OAuthFilter {
     }
 
     fn session_cookie(&self) -> Option<String> {
+        // wont work for real cookies
         self.get_http_request_header(self.config.cookie_name.as_str())
     }
 
-    fn send_authorization_redirect(&self, extra_headers: Vec<(&str, &str)>) {
+    fn code_param(&self) -> Option<String> {
+        match self.get_http_request_header(":path") {
+            None => None,
+            Some(path) => {
+                let params = url::form_urlencoded::parse(path.as_bytes());
+                for (k, v) in params {
+                    if k == "code" {
+                        return Some(v.to_string())
+                    }
+                }
+                return None
+            }
+        }
+    }
 
-        let mut headers = vec![("Location", self.config.redirect_uri.as_str())];
-        headers.append(&mut extra_headers.clone());
-        self.send_http_response(302, headers, None);
+    fn send_authorization_redirect(&self, extra_headers: Vec<(&str, &str)>) {
+        //self.send_http_response(302, headers, None);
     }
 }
 
@@ -82,9 +115,15 @@ impl HttpContext for OAuthFilter {
     fn on_http_request_headers(&mut self, num_headers: usize) -> Action {
 
         if let None = self.session_cookie() {
-            self.send_authorization_redirect(vec![(self.config.cookie_name.as_str(), "RandomCookieValue")])
+            self.send_authorization_redirect(vec![(self.config.cookie_name.as_str(), "RandomCookieValue")]);
+            return Action::Pause
+        }
+        if let Some(code) = self.code_param() {
+            log(LogLevel::Info, format!("Received path with code: {}", code.as_str()).as_str());
+            return Action::Continue
         }
 
+        log(LogLevel::Error, "Not implemented reached");
         Action::Pause
     }
 
@@ -120,9 +159,7 @@ impl RootContext for OAuthRootContext {
                 None
             },
             Some(filter_config) => {
-                Some(Box::new(OAuthFilter{
-                    config: filter_config.clone()
-                }))
+                Some(Box::new(OAuthFilter::new(filter_config.clone()).unwrap()))
             }
         }
     }
@@ -138,7 +175,7 @@ fn default_redirect_uri() -> String {
 }
 
 fn default_oidc_cookie_name() -> String {
-    "oidcToken".to_owned()
+    "oidcSession".to_owned()
 }
 
 fn default_target_header_name() -> String {
