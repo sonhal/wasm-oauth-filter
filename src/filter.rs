@@ -1,5 +1,5 @@
 
-mod lib;
+mod util;
 
 use log::debug;
 use log::error;
@@ -15,12 +15,14 @@ use std::collections::HashMap;
 use std::iter::{FromIterator, Map};
 use url;
 use oauth2::basic::BasicClient;
-use oauth2::{ClientId, ClientSecret, AuthUrl, TokenUrl, RedirectUrl, PkceCodeChallenge, CsrfToken, Scope, PkceCodeVerifier};
+use oauth2::{ClientId, ClientSecret, AuthUrl, TokenUrl, RedirectUrl, PkceCodeChallenge, CsrfToken, Scope, PkceCodeVerifier, AuthorizationCode, HttpRequest, AuthType, http};
 use oauth2::url::ParseError;
 use base64;
 
 #[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
 use getrandom::getrandom;
+use url::Url;
+
 
 #[no_mangle]
 pub fn _start() {
@@ -40,6 +42,7 @@ struct OAuthRootContext {
 struct OAuthFilter {
     config: FilterConfig,
     client: BasicClient,
+    auth_server: Url,
 }
 
 
@@ -70,10 +73,23 @@ impl OAuthFilter {
                 Some(TokenUrl::new(config.token_uri.clone())?)
             )
                 .set_redirect_url(RedirectUrl::new(config.redirect_uri.clone())?);
+
+        let auth_server = Url::parse(config.issuer.as_str()).unwrap();
         Ok(OAuthFilter {
             config,
             client,
+            auth_server
         })
+    }
+
+    fn send_error(&self, code: u32, response: ErrorResponse) {
+        let body = serde_json::to_string_pretty(&response).unwrap();
+        error!("{}", body);
+        self.send_http_response(
+            code,
+            vec![("Content-Type", "application/json")],
+            Some(body.as_bytes())
+        );
     }
 
     fn fail(&mut self) {
@@ -86,23 +102,35 @@ impl OAuthFilter {
     }
 
     fn session_cookie(&self) -> Option<String> {
-        // wont work for real cookies
-        self.get_http_request_header(self.config.cookie_name.as_str())
+        if let Some(cookie_header) = self.get_http_request_header("cookie") {
+            let cookies: Vec<_> = cookie_header.split(";").collect();
+            for cookie_string in cookies {
+                let cookie_name_end = cookie_string.find('=').unwrap_or(0);
+                let cookie_name = &cookie_string[0..cookie_name_end];
+                if cookie_name.trim() == self.config.cookie_name {
+                    return Some(cookie_string[(cookie_name_end + 1)..cookie_string.len()].to_owned());
+                }
+            }
+        }
+        None
     }
 
     fn code_param(&self) -> Option<String> {
-        match self.get_http_request_header(":path") {
-            None => None,
-            Some(path) => {
-                let params = url::form_urlencoded::parse(path.as_bytes());
-                for (k, v) in params {
-                    if k == "code" {
-                        return Some(v.to_string())
-                    }
+        let authority = self.get_http_request_header(":authority");
+        let path = self.get_http_request_header(":path");
+        let url =  (authority, path);
+        if let (Some(authority), Some(path)) = url {
+            log(LogLevel::Info, format!("path value found: {}", path).as_str());
+            let params = url::Url::parse(format!("http://{}{}", authority, path).as_str()).unwrap();
+            for (k, v) in params.query_pairs() {
+                log(LogLevel::Info, format!("query {}={}", k, v).as_str());
+                if k.to_string() == "code" {
+                    return Some(v.to_string())
                 }
-                return None
             }
+            return None
         }
+        None
     }
 
     pub fn new_random_verifier(num_bytes: u32) -> PkceCodeVerifier {
@@ -117,7 +145,7 @@ impl OAuthFilter {
         ))
     }
 
-    fn send_authorization_redirect(&self, extra_headers: Vec<(&str, &str)>) {
+    fn send_authorization_redirect(&self) {
         // TODO cache verifier for use in the token call
         let pkce_challenge= PkceCodeChallenge::from_code_verifier_sha256(&OAuthFilter::new_random_verifier(32));
 
@@ -126,14 +154,14 @@ impl OAuthFilter {
             // Set the desired scopes.
             .add_scope(Scope::new("openid".to_string()))
             // Set the PKCE code challenge.
-            .set_pkce_challenge(pkce_challenge)
+            //.set_pkce_challenge(pkce_challenge)
             .url();
 
         self.send_http_response(
             302,
             vec![
                 ("Location", auth_url.as_str()),
-                ("Set-Cookie", format!("{}={};Max-Age=300", self.config.cookie_name, "RandomCookieValue").as_str())
+                //("Set-Cookie", format!("{}={};Max-Age=300", self.config.cookie_name, "RandomCookieValue").as_str())
             ],
             None
         );
@@ -147,17 +175,37 @@ impl HttpContext for OAuthFilter {
     // This callback will be invoked when request headers arrive
     fn on_http_request_headers(&mut self, num_headers: usize) -> Action {
 
-        if let None = self.session_cookie() {
-            self.send_authorization_redirect(vec![(self.config.cookie_name.as_str(), "RandomCookieValue")]);
+        if let Some(code) = self.code_param() {
+
+            let request = util::token_request(&AuthType::RequestBody,
+                                &ClientId::new(self.config.client_id.clone()),
+                                Some(&ClientSecret::new(self.config.client_id.clone())),
+                                &[],
+                                Some(&RedirectUrl::new(self.config.redirect_uri.clone()).unwrap()),
+                                None,
+                                &TokenUrl::new(self.config.token_uri.clone()).unwrap(),
+                                vec![("grant_type", "authorization_code"), ("code", code.as_str())]);
+
+            let mut request_headers: Vec<(&str, &str)> = request.headers.iter().map( |(k, v)| { (k.as_str(), v.to_str().unwrap() )}).collect();
+            let authority = self.auth_server.origin().unicode_serialization();
+            request_headers.append(&mut vec![
+                (":method", "POST"),
+                (":path", "/customiss/token"),
+                (":authority", authority.as_str()),
+            ]);
+            self.dispatch_http_call("cluster_mock_auth", request_headers, Some(request.body.as_slice()), vec![],  Duration::from_secs(5));
+
+            // self.set_http_request_header(":path", Some("/"));
+            log(LogLevel::Info, format!("Received path with code: {}", code.as_str()).as_str());
             return Action::Pause
         }
-        if let Some(code) = self.code_param() {
-            log(LogLevel::Info, format!("Received path with code: {}", code.as_str()).as_str());
-            return Action::Continue
+        if let None = self.session_cookie() {
+            self.send_authorization_redirect();
+            return Action::Pause
         }
 
-        log(LogLevel::Error, "Not implemented reached");
-        Action::Pause
+        log(LogLevel::Error, "Session cookie found, Access granted");
+        Action::Continue
     }
 
     fn on_http_response_headers(&mut self, _: usize) -> Action {
@@ -165,9 +213,98 @@ impl HttpContext for OAuthFilter {
         self.set_http_response_header("Hello", Some("world"));
         Action::Continue
     }
+
 }
 
-impl Context for OAuthFilter {}
+#[derive(Deserialize)]
+struct TokenResponse {
+    #[serde(default)]
+    error: String,
+    #[serde(default)]
+    error_description: String,
+    #[serde(default)]
+    id_token: String,
+    #[serde(default)]
+    expires_in: i64
+}
+
+#[derive(Serialize)]
+struct ErrorResponse {
+    status: String,
+    error: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    error_description: Option<String>
+}
+
+
+impl Context for OAuthFilter {
+
+    fn on_http_call_response(
+        &mut self,
+        _token_id: u32,
+        _num_headers: usize,
+        body_size: usize,
+        _num_trailers: usize,
+    ) {
+        log(LogLevel::Debug, "Token response from auth server received");
+        if let Some(body) = self.get_http_call_response_body(0, body_size) {
+            match serde_json::from_slice::<TokenResponse>(body.as_slice()) {
+                Ok(data) => {
+                    if data.error != "" {
+                        self.send_error(
+                            500,
+                            create_error_with_description(
+                                data.error.to_owned(),
+                                data.error_description.to_owned()
+                            )
+                        );
+                        return
+                    }
+
+                    if data.id_token != "" {
+                        debug!("id_token found. Setting cookie and redirecting...");
+                        self.send_http_response(
+                            302,
+                            vec![
+                                ("Set-Cookie", format!("{}={};Max-Age=300", self.config.cookie_name, "RandomCookieValue").as_str()),
+                                ("Location", "http://localhost:8090/"),
+                            ],
+                            Some(b""),
+                        );
+                        return
+                    }
+                },
+                Err(e) => {
+                    self.send_error(
+                        500,
+                        create_error(format!("Invalid token response:  {:?}", e))
+                    );
+                }
+            };
+        } else {
+            self.send_error(
+                500,
+                create_error(format!("Received invalid payload from authorization server"))
+            );
+        }
+    }
+}
+
+fn create_error_with_description(error: String, error_description: String) -> ErrorResponse {
+    ErrorResponse{
+        status: "error".to_owned(),
+        error: error,
+        error_description: Some(error_description)
+    }
+}
+
+fn create_error(error: String) -> ErrorResponse {
+    ErrorResponse{
+        status: "error".to_owned(),
+        error: error,
+        error_description: None
+    }
+}
 
 impl Context for OAuthRootContext {}
 impl RootContext for OAuthRootContext {
@@ -214,3 +351,4 @@ fn default_oidc_cookie_name() -> String {
 fn default_target_header_name() -> String {
     "Authorization".to_owned()
 }
+

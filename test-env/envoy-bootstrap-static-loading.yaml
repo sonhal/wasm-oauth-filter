@@ -39,10 +39,10 @@ static_resources:
                           "@type": "type.googleapis.com/google.protobuf.StringValue"
                           value: |
                             {
-                              "redirect_uri": "localhost:8090/callback",
+                              "redirect_uri": "http://localhost:8090/callback",
                               "auth_cluster": "cluster_mock_auth",
-                              "issuer": "http://mock-oauth2-server:8080/default",
-                              "token_uri": "http://localhost:8888/customiss/token",
+                              "issuer": "http://mock-oauth2-server:8080/customiss",
+                              "token_uri": "http://mock-oauth2-server:8888/customiss/token",
                               "auth_uri": "http://localhost:8888/customiss/authorize",
                               "client_id": "mycoolclientid",
                               "client_secret": "mycoolclientsecret"
@@ -69,8 +69,8 @@ static_resources:
                       address: mock-oauth2-server
                       port_value: 8080
     - name: some_service
-      connect_timeout: 0.25s
-      type: STATIC
+      connect_timeout: 1s
+      type: STRICT_DNS
       lb_policy: ROUND_ROBIN
       load_assignment:
         cluster_name: some_service
@@ -79,5 +79,5 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: 127.0.0.1
-                      port_value: 1234
+                      address: token-tester
+                      port_value: 8080
