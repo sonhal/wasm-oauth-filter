@@ -1,5 +1,7 @@
 
 mod util;
+pub mod oauther;
+
 
 use log::debug;
 use log::error;
@@ -47,7 +49,7 @@ struct OAuthFilter {
 
 
 #[derive(Deserialize, Clone, Debug)]
-struct FilterConfig {
+pub struct FilterConfig {
     #[serde(default = "default_redirect_uri")]
     redirect_uri: String,
     #[serde(default = "default_target_header_name")]

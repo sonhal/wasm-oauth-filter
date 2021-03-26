@@ -2,7 +2,7 @@ use std::borrow::Cow;
 use oauth2::http::{HeaderMap, HeaderValue};
 use oauth2::http::header::{ACCEPT, CONTENT_TYPE, AUTHORIZATION};
 use url::form_urlencoded;
-use oauth2::{AuthType, ClientId, ClientSecret, RedirectUrl, Scope, TokenUrl, HttpRequest, http};
+use oauth2::{AuthType, ClientId, ClientSecret, RedirectUrl, Scope, TokenUrl, HttpRequest, http, PkceCodeVerifier};
 
 
 const CONTENT_TYPE_JSON: &str = "application/json";
@@ -101,4 +101,16 @@ pub fn token_request<'a>(
         headers,
         body,
     }
+}
+
+pub fn new_random_verifier(num_bytes: u32) -> PkceCodeVerifier {
+    let random_bytes: Vec<u8> = (0..num_bytes).map(|_| {
+        let mut buf = [0u8; 1];
+        getrandom::getrandom(&mut buf).unwrap();
+        buf[0]
+    }).collect();
+    PkceCodeVerifier::new(base64::encode_config(
+        &random_bytes,
+        base64::URL_SAFE_NO_PAD,
+    ))
 }
