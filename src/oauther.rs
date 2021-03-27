@@ -1,24 +1,45 @@
 use crate::{FilterConfig, util};
-use oauth2::{ClientSecret, ClientId, TokenUrl, PkceCodeChallenge, AuthUrl, RedirectUrl, CsrfToken, Scope};
+use oauth2::{ClientSecret, ClientId, TokenUrl, PkceCodeChallenge, AuthUrl, RedirectUrl, CsrfToken, Scope, PkceCodeVerifier};
 use url;
 use cookie::Cookie;
 use crate::oauther::Response::{NewAction, NewState};
 use url::{Url, ParseError};
 use oauth2::basic::BasicClient;
 use getrandom;
+use std::cell::RefCell;
+use std::ops::DerefMut;
 
 pub struct OAuther {
     config: OAutherConfig,
     state: Box<dyn State>,
     client: BasicClient,
+    cache: Box<dyn Cache>,
+}
+
+pub enum Action {
+    Noop,
+    Redirect(Url),
+    HttpCall,
+    Allow
 }
 
 trait State {
     fn handle_request(&self, oauther: &OAuther, header: &Vec<(&str, &str)>) -> Response;
 }
 
+pub trait Cache {
+    fn get_tokens_for_session(&self, session: &String) -> Option<Vec<String>>;
+    fn set_tokens_for_session(&mut self, session: String, tokens: Vec<String>);
+
+    fn get_verfier_for_state(&self, state: &String) -> Option<&PkceCodeVerifier>;
+    fn set_verfier_for_state(&mut self, state: &String, verifier: &PkceCodeVerifier);
+}
+
 impl OAuther {
-    pub fn new(config: FilterConfig) -> Result<OAuther, ParseError> {
+    pub fn new(
+        config: FilterConfig,
+        cache: Box<dyn Cache>,
+    ) -> Result<OAuther, ParseError> {
         let auther_config = OAutherConfig::from(config);
 
         let client = BasicClient::new(
@@ -29,16 +50,28 @@ impl OAuther {
             )
                 .set_redirect_url(RedirectUrl::from_url(auther_config.redirect_url.clone()));
 
-        Ok(OAuther { config: auther_config, state: Box::new(Start { }), client })
+        Ok(OAuther {
+            config: auther_config,
+            state: Box::new(Start { }),
+            client,
+            cache,
+        })
     }
 
     fn handle_request_header(&mut self, headers: Vec<(&str, &str)>) -> Action {
+
         match self.state.handle_request(self, &headers) {
             Response::NewState(state) => {
                 self.state = state;
                 self.handle_request_header(headers)
             }
-            Response::NewAction(action) => action
+            Response::NewAction(action) => match action {
+                OAutherAction::Redirect(url, update) => {
+                    update(self);
+                    Action::Redirect(url)
+                }
+                _ => Action::Noop,
+            }
         }
     }
 
@@ -61,12 +94,12 @@ impl OAuther {
         }
     }
 
-    fn authorization_server_redirect(&self) -> Url {
+    fn authorization_server_redirect(&self) -> (Url, Box<dyn Fn(&mut OAuther) -> ()>) {
         // TODO cache verifier for use in the token call
+
+        let verifier = util::new_random_verifier(32);
         let pkce_challenge=
-            PkceCodeChallenge::from_code_verifier_sha256(
-                &util::new_random_verifier(32)
-            );
+            PkceCodeChallenge::from_code_verifier_sha256(&verifier);
 
         let (auth_url, csrf_token) = self.client
             .authorize_url(|| CsrfToken::new("state123".to_string()))
@@ -75,7 +108,14 @@ impl OAuther {
             // Set the PKCE code challenge.
             .set_pkce_challenge(pkce_challenge)
             .url();
-        auth_url
+
+        let closure_state = csrf_token.secret().clone();
+        let closure_verifier = PkceCodeVerifier::new(verifier.secret().clone());
+        (
+            auth_url,
+            Box::new(
+                move |  oauther|
+                    { oauther.cache.set_verfier_for_state(&closure_state, &closure_verifier)}))
     }
 }
 
@@ -85,32 +125,33 @@ impl State for Start  {
         // check cookie
         match oauther.session_cookie(headers) {
             Some(cookie) => NewState(Box::new(CookieFound { })),
-            None => NewAction(Action::Redirect(oauther.authorization_server_redirect())),
+            None => {
+                let (url, update) = oauther.authorization_server_redirect();
+                NewAction(OAutherAction::Redirect(url, update))
+            },
         }
     }
 }
 
 impl State for CookieFound {
 
-    fn handle_request(&self, oauther: &OAuther, header: &Vec<(&str, &str)>) -> Response {
-        NewAction(Action::Noop)
+    fn handle_request(&self, _oauther: &OAuther, _header: &Vec<(&str, &str)>) -> Response {
+        NewAction(OAutherAction::Noop)
     }
 }
 
 
 enum Response {
     NewState(Box<dyn State>),
-    NewAction(Action),
+    NewAction(OAutherAction),
 }
 
-#[derive(Debug)]
-enum Action {
+enum OAutherAction {
     Noop,
-    Redirect(Url),
+    Redirect(Url, Box<dyn Fn(&mut OAuther) -> ()>),
     HttpCall,
     Allow
 }
-
 
 struct Start { }
 struct CookieFound {  }
@@ -148,7 +189,37 @@ impl OAutherConfig {
 mod tests {
     use super::*;
     use std::any::Any;
-    use crate::oauther::Action::Redirect;
+    use crate::oauther::OAutherAction::Redirect;
+    use std::borrow::Borrow;
+    use std::collections::HashMap;
+
+    struct TestCache {
+        sessions: HashMap<String, Vec<String>>,
+        verifiers: HashMap<String, PkceCodeVerifier>
+    }
+    impl Cache for TestCache {
+        fn get_tokens_for_session(&self, session: &String) -> Option<Vec<String>> {
+            if let Some(tokens) = self.sessions.get(session) {
+                return Some(tokens.to_owned())
+            };
+            None
+        }
+
+        fn set_tokens_for_session(&mut self, session: String, tokens: Vec<String>) {
+            self.sessions.insert(session, tokens);
+        }
+
+        fn get_verfier_for_state(&self, state: &String) -> Option<&PkceCodeVerifier> {
+            if let Some(verifier) = self.verifiers.get(state) {
+                return Some(verifier)
+            };
+            None
+        }
+
+        fn set_verfier_for_state(&mut self, state: &String, verifier: &PkceCodeVerifier) {
+            self.verifiers.insert(state.to_string(), PkceCodeVerifier::new(verifier.secret().to_string()));
+        }
+    }
 
     fn test_config() -> FilterConfig {
         FilterConfig {
@@ -164,29 +235,40 @@ mod tests {
         }
     }
 
+    fn test_oauther() -> OAuther {
+        OAuther::new(
+            test_config(),
+            Box::new(TestCache { sessions: HashMap::new(), verifiers: HashMap::new() }),
+        ).unwrap()
+    }
+
     #[test]
     fn new() {
+        let oauther= test_oauther();
         assert_eq!(
-            OAuther::new(test_config()).unwrap().config.authorization_url.as_str(),
+            oauther.config.authorization_url.as_str(),
             "http://authorization/"
         );
     }
 
     #[test]
     fn unauthorized_request() {
-        let mut oauther = OAuther::new(test_config()).unwrap();
-        let action: Action = oauther.handle_request_header(vec![("random_header", "value")]);
+        let mut oauther = test_oauther();
+
+        let action = oauther.handle_request_header(vec![("random_header", "value")]);
 
         if let Action::Redirect(url) = action {
             assert_eq!(url.origin().unicode_serialization().as_str(), "http://authorization");
-        } else { panic!("action was not redirect, action={:?}", action ) }
+            let result = oauther.cache.get_verfier_for_state(&"state123".to_string());
+            assert_ne!(result.unwrap().secret(), "");
+        } else { panic!("action was not redirect, action" ) }
 
     }
 
     #[test]
     fn session_cookie_present_request() {
-        let mut oauther = OAuther::new(test_config()).unwrap();
-        let action: Action = oauther.handle_request_header(vec![("sessioncookie", "value")]);
+        let mut oauther= test_oauther();
+        let action = oauther.handle_request_header(vec![("sessioncookie", "value")]);
         assert_eq!(action.type_id(), Action::Allow.type_id());
     }
 }
