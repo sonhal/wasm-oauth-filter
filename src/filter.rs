@@ -16,8 +16,8 @@ use proxy_wasm::types::LogLevel::Info;
 use std::collections::HashMap;
 use std::iter::{FromIterator, Map};
 use url;
-use oauth2::basic::BasicClient;
-use oauth2::{ClientId, ClientSecret, AuthUrl, TokenUrl, RedirectUrl, PkceCodeChallenge, CsrfToken, Scope, PkceCodeVerifier, AuthorizationCode, HttpRequest, AuthType, http};
+use oauth2::basic::{BasicClient, BasicTokenType};
+use oauth2::{ClientId, ClientSecret, AuthUrl, TokenUrl, RedirectUrl, PkceCodeChallenge, CsrfToken, Scope, PkceCodeVerifier, AuthorizationCode, HttpRequest, AuthType, http, StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
 use oauth2::url::ParseError;
 use base64;
 
@@ -165,6 +165,12 @@ struct TokenResponse {
     #[serde(default)]
     id_token: String,
     #[serde(default)]
+    access_token: String,
+    #[serde(default)]
+    token_type: String,
+    #[serde(default)]
+    scope: String,
+    #[serde(default)]
     expires_in: i64
 }
 
@@ -201,17 +207,33 @@ impl Context for OAuthFilter {
                         return
                     }
 
-                    if data.id_token != "" {
-                        debug!("id_token found. Setting cookie and redirecting...");
-                        self.send_http_response(
-                            302,
-                            vec![
-                                ("Set-Cookie", format!("{}={};Max-Age=300", self.config.cookie_name, "RandomCookieValue").as_str()),
-                                ("Location", "http://localhost:8090/"),
-                            ],
-                            Some(b""),
+                    if data.access_token != "" {
+                        debug!("access token found");
+                        let test_token = "testingonly".to_string();
+                        let request = StandardTokenResponse::new(
+                            AccessToken::new(data.access_token),
+                            BasicTokenType::Bearer,
+                            EmptyExtraTokenFields {}
                         );
-                        return
+
+                        let action: oauther::Action = self.oauther.handle_token_call_response(&test_token, &request);
+                        match action {
+                            oauther::Action::Noop => unreachable!(),
+                            oauther::Action::Redirect(_, _) => unreachable!(),
+                            oauther::Action::HttpCall(_) => unreachable!(),
+                            oauther::Action::Allow(headers) => {
+                                let mut headers: Vec<(&str, &str)>
+                                    = headers.iter().map( |(name, value)|{ (name.as_str(), value.to_str().unwrap()) }).collect();
+                                let old_headers: Vec<(String, String)> = self.get_http_request_headers();
+                                let mut old_headers: Vec<(&str, &str)> = old_headers.iter().map(| (name, value) |{ (name.as_str(), value.as_str())}).collect();
+                                headers.append(&mut old_headers);
+
+                                self.set_http_request_headers(headers.clone());
+                                log(LogLevel::Info, format!("Resuming call with headers={:?}", headers).as_str());
+                                self.resume_http_request();
+                                return
+                            }
+                        }
                     }
                 },
                 Err(e) => {
@@ -278,6 +300,9 @@ impl RootContext for OAuthRootContext {
         Some(ContextType::HttpContext)
     }
 }
+
+
+
 
 
 fn default_redirect_uri() -> String {
