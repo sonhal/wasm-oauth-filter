@@ -1,10 +1,10 @@
 use crate::{FilterConfig, util};
-use oauth2::{ClientSecret, ClientId, TokenUrl, PkceCodeChallenge, AuthUrl, RedirectUrl, CsrfToken, Scope, PkceCodeVerifier, HttpRequest, AuthType};
+use oauth2::{ClientSecret, ClientId, TokenUrl, PkceCodeChallenge, AuthUrl, RedirectUrl, CsrfToken, Scope, PkceCodeVerifier, HttpRequest, AuthType, StandardTokenResponse, EmptyExtraTokenFields, TokenResponse};
 use url;
 use cookie::{Cookie, CookieBuilder};
 use crate::oauther::Response::{NewAction, NewState};
 use url::{Url, ParseError};
-use oauth2::basic::BasicClient;
+use oauth2::basic::{BasicClient, BasicTokenType};
 use getrandom;
 
 use oauth2::http::{HeaderMap, HeaderValue};
@@ -37,6 +37,10 @@ pub trait Cache {
 
 trait State {
     fn handle_request(&self, oauther: &OAuther, header: &Vec<(&str, &str)>) -> Response;
+    fn handle_token_call_response(
+        &self, session: &String,
+        token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>
+    ) -> Response;
 }
 
 impl OAuther {
@@ -62,7 +66,7 @@ impl OAuther {
         })
     }
 
-    fn handle_request_header(&mut self, headers: Vec<(&str, &str)>) -> Action {
+    pub fn handle_request_header(&mut self, headers: Vec<(&str, &str)>) -> Action {
 
         match self.state.handle_request(self, &headers) {
             Response::NewState(state) => {
@@ -84,7 +88,14 @@ impl OAuther {
         }
     }
 
-    pub fn session_cookie(&self, headers: &Vec<(&str, &str)>) -> Option<String> {
+    pub fn handle_token_call_response(&mut self, session: &String, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Action {
+        self.cache.set_tokens_for_session(
+            session.to_string(),
+            vec![token_response.access_token().secret().to_string()]);
+        Action::Allow(self.allow_headers(session))
+    }
+
+    fn session_cookie(&self, headers: &Vec<(&str, &str)>) -> Option<String> {
         let cookies: Option<&(&str, &str)> =
             headers.iter().find( |(name, value)| { *name == "cookie" } );
         return match cookies {
@@ -188,6 +199,10 @@ impl State for Start  {
             },
         }
     }
+
+    fn handle_token_call_response(&self, _session: &String, _token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
+        unimplemented!()
+    }
 }
 
 impl State for NoValidSession {
@@ -196,6 +211,10 @@ impl State for NoValidSession {
         let mut headers = HeaderMap::new();
         headers.insert(SET_COOKIE, oauther.create_session_cookie().to_string().parse().unwrap());
         NewAction(OAutherAction::Redirect(url, headers,  update))
+    }
+
+    fn handle_token_call_response(&self, _session: &String, _token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
+        unimplemented!()
     }
 }
 
@@ -223,6 +242,10 @@ impl State for SessionCookiePresent {
                 Response::NewAction(OAutherAction::Allow(oauther.allow_headers(&tokens[0])))
             }
         }
+    }
+
+    fn handle_token_call_response(&self, session: &String, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
+        unimplemented!()
     }
 }
 
@@ -279,8 +302,10 @@ mod tests {
     use crate::oauther::OAutherAction::Redirect;
     use std::borrow::Borrow;
     use std::collections::HashMap;
-    use oauth2::AccessToken;
+    use oauth2::{AccessToken, StandardTokenResponse, EmptyExtraTokenFields};
     use oauth2::http::header::FORWARDED;
+    use crate::TokenResponse;
+    use oauth2::basic::{BasicTokenResponse, BasicTokenType};
 
     struct TestCache {
         sessions: HashMap<String, Vec<String>>,
@@ -404,7 +429,6 @@ mod tests {
     fn session_cookie_present_no_valid_token_in_cache_but_auth_code_in_query() {
         let mut oauther= test_oauther();
 
-
         let action = oauther.handle_request_header(
             vec![
                 ("cookie", "sessioncookie=mysession"),
@@ -413,6 +437,21 @@ mod tests {
             ]);
         if let Action::HttpCall( http_request ) = action {
             assert_eq!(http_request.url.as_str(), oauther.config.token_url.as_str())
+        } else {panic!("action should be to HttpCall")}
+    }
+
+    #[test]
+    fn handle_valid_token_call_response() {
+        let mut oauther= test_oauther();
+        let test_session = "testsession".to_string();
+        let token_call_response = StandardTokenResponse::new(
+            AccessToken::new("myaccesstoken".to_string()),
+        BasicTokenType::Bearer,
+        EmptyExtraTokenFields { });
+
+        let action = oauther.handle_token_call_response(&test_session, &token_call_response);
+        if let Action::Allow( headers ) = action {
+            assert!(headers.contains_key(AUTHORIZATION));
         } else {panic!("action should be to HttpCall")}
     }
 
