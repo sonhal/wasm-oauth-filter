@@ -1,13 +1,17 @@
 use crate::{FilterConfig, util};
 use oauth2::{ClientSecret, ClientId, TokenUrl, PkceCodeChallenge, AuthUrl, RedirectUrl, CsrfToken, Scope, PkceCodeVerifier};
 use url;
-use cookie::Cookie;
+use cookie::{Cookie, CookieBuilder};
 use crate::oauther::Response::{NewAction, NewState};
 use url::{Url, ParseError};
 use oauth2::basic::BasicClient;
 use getrandom;
 use std::cell::RefCell;
 use std::ops::DerefMut;
+use oauth2::http::{HeaderMap, HeaderValue};
+use std::time;
+use std::time::Duration;
+use oauth2::http::header::SET_COOKIE;
 
 pub struct OAuther {
     config: OAutherConfig,
@@ -18,7 +22,7 @@ pub struct OAuther {
 
 pub enum Action {
     Noop,
-    Redirect(Url),
+    Redirect(Url, HeaderMap),
     HttpCall,
     Allow
 }
@@ -66,9 +70,9 @@ impl OAuther {
                 self.handle_request_header(headers)
             }
             Response::NewAction(action) => match action {
-                OAutherAction::Redirect(url, update) => {
+                OAutherAction::Redirect(url, headers, update) => {
                     update(self);
-                    Action::Redirect(url)
+                    Action::Redirect(url, headers)
                 }
                 _ => Action::Noop,
             }
@@ -92,6 +96,15 @@ impl OAuther {
             },
             None => None
         }
+    }
+
+    fn create_session_cookie(&self) -> Cookie {
+        CookieBuilder::new(
+            self.config.cookie_name.as_str().to_owned(),
+            util::new_random_verifier(32).secret().to_owned())
+            .secure(true)
+            .http_only(true)
+            .finish()
     }
 
     fn authorization_server_redirect(&self) -> (Url, Box<dyn Fn(&mut OAuther) -> ()>) {
@@ -127,7 +140,9 @@ impl State for Start  {
             Some(cookie) => NewState(Box::new(CookieFound { })),
             None => {
                 let (url, update) = oauther.authorization_server_redirect();
-                NewAction(OAutherAction::Redirect(url, update))
+                let mut headers = HeaderMap::new();
+                headers.insert(SET_COOKIE, oauther.create_session_cookie().to_string().parse().unwrap());
+                NewAction(OAutherAction::Redirect(url, headers,  update))
             },
         }
     }
@@ -148,7 +163,7 @@ enum Response {
 
 enum OAutherAction {
     Noop,
-    Redirect(Url, Box<dyn Fn(&mut OAuther) -> ()>),
+    Redirect(Url, HeaderMap, Box<dyn Fn(&mut OAuther) -> ()>),
     HttpCall,
     Allow
 }
@@ -257,10 +272,11 @@ mod tests {
 
         let action = oauther.handle_request_header(vec![("random_header", "value")]);
 
-        if let Action::Redirect(url) = action {
+        if let Action::Redirect(url, headers) = action {
             assert_eq!(url.origin().unicode_serialization().as_str(), "http://authorization");
             let result = oauther.cache.get_verfier_for_state(&"state123".to_string());
             assert_ne!(result.unwrap().secret(), "");
+            assert!(headers.contains_key("set-cookie"));
         } else { panic!("action was not redirect, action" ) }
 
     }
@@ -270,5 +286,11 @@ mod tests {
         let mut oauther= test_oauther();
         let action = oauther.handle_request_header(vec![("sessioncookie", "value")]);
         assert_eq!(action.type_id(), Action::Allow.type_id());
+    }
+
+    #[test]
+    fn code_grant_redirect() {
+        let mut oauther = test_oauther();
+        let action = oauther.handle_request_header(vec![(":path", "auth/?code=awesomecode&state=state123")]);
     }
 }
