@@ -248,7 +248,8 @@ impl Context for OAuthFilter {
                                 self.set_http_request_headers(headers.clone());
                                 proxy_wasm::hostcalls::log(LogLevel::Info, format!("Resuming call with headers={:?}", headers).as_str());
                                 let mut cache = self.cache.borrow_mut();
-                                cache.store(self);
+                                cache.store(self).unwrap();
+                                self.respond_with_redirect("http://localhost:8080/".parse().unwrap(), HeaderMap::new());
                                 return
                             }
                         }
