@@ -25,9 +25,10 @@ jobs:
       run: |
         rustup update
         rustup target add wasm32-unknown-unknown
+        cargo install cargo-wasi
         make release
     - name: Run tests
-      run: "echo TODO make tests work" #cargo test --verbose
+      run: cargo test --verbose
     - name: "Build WASM OCI image"
       run: make build-image # -e IMAGE=${IMAGE}
     - name: "Push WASM OCI image"

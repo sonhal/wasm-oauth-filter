@@ -5,10 +5,10 @@ FILTER_TAG=v0.1
 IMAGE ?= webassemblyhub.io/thesisworker/$(FILTER_NAME):$(FILTER_TAG)
 
 release:
-	cargo build --target wasm32-unknown-unknown --release
+	cargo wasi build --release
 
 build-image:
-	wasme build precompiled target/wasm32-unknown-unknown/release/$(FILTER_NAME).wasm --tag $(IMAGE)
+	wasme build precompiled target/wasm32-wasi/release/$(FILTER_NAME).wasm --tag $(IMAGE)
 
 build-release-image: release build-image
 
