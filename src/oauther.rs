@@ -54,7 +54,7 @@ trait State: Debug {
         token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>
     ) -> Response;
 
-    fn debug_entering(&self, headers: Vec<(&str, &str)>) {
+    fn debug_entering(&self, headers: &Vec<(&str, &str)>) {
         crate::log_debug(format!("Entering {:?} state with headers={:?}", self, headers));
     }
 }
@@ -104,13 +104,21 @@ impl OAuther {
         }
     }
 
-    pub fn handle_token_call_response(&mut self, session: &String, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Action {
-        let mut cache: RefMut<dyn Cache> = self.cache.deref().deref().borrow_mut();
-        cache.set_tokens_for_session(
-            session,
-            token_response.access_token().secret(),
-            None);
-        Action::Allow(self.allow_headers(session))
+    pub fn handle_token_call_response(&mut self, session: &String, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Result<Action, String> {
+        match self.state.handle_token_call_response(session, token_response) {
+            NewState(state) => Err(format!("ERROR, invalid state returned NewState={:?}", state)),
+            NewAction( action) => {
+                match action {
+                    OAutherAction::Noop => Err(format!("ERROR, invalid action Noop")),
+                    OAutherAction::Redirect( url, headers, update) => {
+                        update(self); // run the mutating update
+                        Ok(Action::Redirect(url, headers))
+                    }
+                    OAutherAction::HttpCall( request) => Ok(Action::HttpCall(request)),
+                    OAutherAction::Allow( headers) => Ok(Action::Allow(headers)),
+                }
+            }
+        }
     }
 
     fn session_cookie(&self, headers: &Vec<(&str, &str)>) -> Option<String> {
@@ -212,10 +220,10 @@ impl OAuther {
 impl State for Start  {
 
     fn handle_request(&self, oauther: &OAuther, headers: &Vec<(&str, &str)>) -> Response {
-
+        self.debug_entering(headers);
         // check cookie
         match oauther.session_cookie(headers) {
-            Some(_) => NewState(Box::new(SessionCookiePresent { })),
+            Some( session ) => NewState(Box::new(SessionCookiePresent { session })),
             None => {
                 Response::NewState(Box::new(NoValidSession { }))
             },
@@ -228,7 +236,8 @@ impl State for Start  {
 }
 
 impl State for NoValidSession {
-    fn handle_request(&self, oauther: &OAuther, _: &Vec<(&str, &str)>) -> Response {
+    fn handle_request(&self, oauther: &OAuther, headers: &Vec<(&str, &str)>) -> Response {
+        self.debug_entering(headers);
         let (url, update) = oauther.authorization_server_redirect();
         let mut headers = HeaderMap::new();
         headers.insert(SET_COOKIE, oauther.create_session_cookie().to_string().parse().unwrap());
@@ -242,6 +251,7 @@ impl State for NoValidSession {
 
 impl State for SessionCookiePresent {
     fn handle_request(&self, oauther: &OAuther, headers: &Vec<(&str, &str)>) -> Response {
+        self.debug_entering(headers);
         let session = oauther.session_cookie(headers)
             .expect("Bad state error, in SessionCookiePresent state, but no cookie found");
 
@@ -292,7 +302,9 @@ struct Start { }
 #[derive(Debug)]
 struct NoValidSession { }
 #[derive(Debug)]
-struct SessionCookiePresent {  }
+struct SessionCookiePresent {
+    session: String,
+}
 
 struct OAutherConfig {
     cookie_name: String,
@@ -463,6 +475,7 @@ mod tests {
         let action = oauther.handle_token_call_response(&test_session, &token_call_response);
         if let Action::Allow( headers ) = action {
             assert!(headers.contains_key(AUTHORIZATION));
+            assert_eq!(headers.get(AUTHORIZATION).unwrap().to_str().unwrap(), "bearer myaccesstoken");
         } else {panic!("action should be to HttpCall")}
     }
 
@@ -484,6 +497,7 @@ mod tests {
             vec![("cookie", "sessioncookie=testsession"), (":path", "/"),]);
         if let Action::Allow( headers ) = action {
             assert!(headers.contains_key(AUTHORIZATION));
+            assert_eq!(headers.get(AUTHORIZATION).unwrap().to_str().unwrap(), "bearer myaccesstoken");
         } else {panic!("action={:?} should be to Allow", action)}
     }
 }

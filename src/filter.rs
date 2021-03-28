@@ -73,6 +73,8 @@ impl OAuthFilter {
 
     fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
         proxy_wasm::hostcalls::log(Info, "Creating new HttpContext");
+        proxy_wasm::hostcalls::log(Info, format!("Cache state={:?}", cache).as_str());
+
 
         let cache = Rc::new(RefCell::new(cache));
         let oauther = OAuther::new(config.clone(), Box::new(cache.clone()))?;
@@ -112,6 +114,49 @@ impl OAuthFilter {
             headers,
             None
         );
+    }
+
+    fn oauth_result_handler(&self, action: oauther::Action) -> Action {
+        match action {
+            oauther::Action::Redirect( url, headers) => {
+                self.respond_with_redirect(url, headers);
+                Action::Pause
+            }
+            oauther::Action::HttpCall( request) => {
+                let mut request_headers: Vec<(&str, &str)> = serialize_headers(&request.headers);
+
+                let token_url: Url = self.config.token_uri.parse().unwrap();
+                let authority = token_url.origin().unicode_serialization();
+                let path = token_url.path();
+                request_headers.append(&mut vec![
+                    (":method", "POST"),
+                    (":path", path),
+                    (":authority", authority.as_str())]);
+
+                self.dispatch_http_call(
+                    &self.config.auth_cluster,
+                    request_headers,
+                    Some(request.body.as_slice()),
+                    vec![],
+                    Duration::from_secs(5));
+                Action::Pause
+            },
+            oauther::Action::Allow(additional_headers) => {
+
+                // TODO simplify and clean this this up
+                let old_headers: Vec<(String, String)> = self.get_http_request_headers();
+                let mut additional_headers: Vec<(&str, &str)> = serialize_headers(&additional_headers);
+                let new_headers: Vec<(String, String)> = merge_old_and_new(old_headers, additional_headers);
+                let headers = serialize_string_headers(&new_headers);
+
+                proxy_wasm::hostcalls::log(LogLevel::Info, format!("Resuming call with headers={:?}", headers).as_str());
+                self.set_http_request_headers(headers);
+
+                let mut cache = self.cache.borrow_mut();
+                cache.store(self).unwrap();
+                Action::Continue
+            }
+        }
     }
 }
 
@@ -227,31 +272,35 @@ impl Context for OAuthFilter {
 
                     if data.access_token != "" {
                         log::debug!("access token found");
-                        let test_token = "testingonly".to_string();
                         let request = StandardTokenResponse::new(
                             AccessToken::new(data.access_token),
                             BasicTokenType::Bearer,
                             EmptyExtraTokenFields {}
                         );
 
-                        let action: oauther::Action = self.oauther.handle_token_call_response(&test_token, &request);
+                        let action = self.oauther.handle_token_call_response(&"dummy".to_string(), &request);
                         match action {
-                            oauther::Action::Redirect(_, _) => unreachable!(),
-                            oauther::Action::HttpCall(_) => unreachable!(),
-                            oauther::Action::Allow(headers) => {
-                                let mut headers: Vec<(&str, &str)>
-                                    = headers.iter().map( |(name, value)|{ (name.as_str(), value.to_str().unwrap()) }).collect();
-                                let old_headers: Vec<(String, String)> = self.get_http_request_headers();
-                                let mut old_headers: Vec<(&str, &str)> = old_headers.iter().map(| (name, value) |{ (name.as_str(), value.as_str())}).collect();
-                                headers.append(&mut old_headers);
+                            Ok(action) => {
+                                match action {
+                                    oauther::Action::Redirect(_, _) => unreachable!(),
+                                    oauther::Action::HttpCall(_) => unreachable!(),
+                                    oauther::Action::Allow(headers) => {
+                                        let mut headers: Vec<(&str, &str)>
+                                            = headers.iter().map(|(name, value)| { (name.as_str(), value.to_str().unwrap()) }).collect();
+                                        let old_headers: Vec<(String, String)> = self.get_http_request_headers();
+                                        let mut old_headers: Vec<(&str, &str)> = old_headers.iter().map(|(name, value)| { (name.as_str(), value.as_str()) }).collect();
+                                        headers.append(&mut old_headers);
 
-                                self.set_http_request_headers(headers.clone());
-                                proxy_wasm::hostcalls::log(LogLevel::Info, format!("Resuming call with headers={:?}", headers).as_str());
-                                let mut cache = self.cache.borrow_mut();
-                                cache.store(self).unwrap();
-                                self.respond_with_redirect("http://localhost:8080/".parse().unwrap(), HeaderMap::new());
-                                return
+                                        self.set_http_request_headers(headers.clone());
+                                        proxy_wasm::hostcalls::log(LogLevel::Info, format!("Resuming call with headers={:?}", headers).as_str());
+                                        let mut cache = self.cache.borrow_mut();
+                                        cache.store(self).unwrap();
+                                        self.respond_with_redirect("http://localhost:8090/".parse().unwrap(), HeaderMap::new());
+                                        return
+                                    }
+                                }
                             }
+                            Err(error) => panic!("Error: {}", error)
                         }
                     }
                 },
@@ -345,12 +394,35 @@ fn default_target_header_name() -> String {
     "Authorization".to_owned()
 }
 
+fn serialize_headers(headers: &HeaderMap) -> Vec<(&str, &str)> {
+    headers.iter()
+        .map(
+            |( name, value)|
+                { (name.as_str(), value.to_str().unwrap()) }
+        ).collect()
+}
+
+fn serialize_string_headers(headers: &Vec<(String, String)>) -> Vec<(&str, &str)> {
+    headers.iter()
+        .map(
+            |( name, value)|
+                { (name.as_str(), value.as_str()) }
+        ).collect()
+}
+
+fn merge_old_and_new(old: Vec<(String, String)>, new: Vec<(&str, &str)>) -> Vec<(String, String)> {
+    let new: Vec<(String, String)> = new.iter().map(| (name, value) | { (name.to_string(), value.to_string())}).collect();
+    let merged: Vec<(String, String)> =
+        old.iter().chain(new.iter()).map( | (name, value) | { (name.to_string(),  value.to_string())}).collect();
+    merged
+}
+
 fn log_debug(message: String) {
     cfg_if::cfg_if! {
             if #[cfg(all(target_arch = "wasm32", target_os = "wasi"))] {
                 proxy_wasm::hostcalls::log(LogLevel::Debug, &message);
             } else {
-                log::debug!(message);
+                println!("{}", message);
             }
         }
 }
