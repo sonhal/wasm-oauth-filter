@@ -7,17 +7,22 @@ use url::{Url, ParseError};
 use oauth2::basic::{BasicClient, BasicTokenType};
 use getrandom;
 
+use serde::{Serialize, Deserialize};
 use oauth2::http::{HeaderMap, HeaderValue};
 use std::time;
 use std::time::Duration;
 use oauth2::http::header::{SET_COOKIE, HeaderName, AUTHORIZATION};
+use std::cell::{RefCell, RefMut};
+use std::rc::Rc;
+use std::borrow::BorrowMut;
+use std::ops::Deref;
 
 
 pub struct OAuther {
     config: OAutherConfig,
     state: Box<dyn State>,
     client: BasicClient,
-    cache: Box<dyn Cache>,
+    cache: Box<Rc<RefCell<dyn Cache>>>,
 }
 
 pub enum Action {
@@ -27,12 +32,18 @@ pub enum Action {
     Allow(HeaderMap)
 }
 
-pub trait Cache {
-    fn get_tokens_for_session(&self, session: &String) -> Option<Vec<String>>;
-    fn set_tokens_for_session(&mut self, session: String, tokens: Vec<String>);
+#[derive(Debug, Serialize, Deserialize)]
+pub struct SessionData {
+    pub(crate) access_token: String,
+    pub(crate) id_token: Option<String>,
+}
 
-    fn get_verfier_for_state(&self, state: &String) -> Option<&PkceCodeVerifier>;
-    fn set_verfier_for_state(&mut self, state: &String, verifier: &PkceCodeVerifier);
+pub trait Cache {
+    fn get_tokens_for_session(&self, session: &String) -> Option<&SessionData>;
+    fn set_tokens_for_session(&mut self, session: &String, access_token: &String, id_token: Option<&String>);
+
+    fn get_verifier_for_state(&self, state: &String) -> Option<&String>;
+    fn set_verifier_for_state(&mut self, state: &String, verifier: &String);
 }
 
 trait State {
@@ -46,7 +57,7 @@ trait State {
 impl OAuther {
     pub fn new(
         config: FilterConfig,
-        cache: Box<dyn Cache>,
+        cache: Box<Rc<RefCell<dyn Cache>>>,
     ) -> Result<OAuther, ParseError> {
         let auther_config = OAutherConfig::from(config);
 
@@ -89,9 +100,11 @@ impl OAuther {
     }
 
     pub fn handle_token_call_response(&mut self, session: &String, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Action {
-        self.cache.set_tokens_for_session(
-            session.to_string(),
-            vec![token_response.access_token().secret().to_string()]);
+        let mut cache: RefMut<dyn Cache> = self.cache.deref().deref().borrow_mut();
+        cache.set_tokens_for_session(
+            session,
+            token_response.access_token().secret(),
+            None);
         Action::Allow(self.allow_headers(session))
     }
 
@@ -140,11 +153,14 @@ impl OAuther {
 
         let closure_state = csrf_token.secret().clone();
         let closure_verifier = PkceCodeVerifier::new(verifier.secret().clone());
+
         (
             auth_url,
             Box::new(
                 move |  oauther|
-                    { oauther.cache.set_verfier_for_state(&closure_state, &closure_verifier)}))
+                    {
+                        let mut cache: RefMut<dyn Cache> = oauther.cache.deref().deref().borrow_mut();
+                        cache.set_verifier_for_state(&closure_state, closure_verifier.secret())}))
     }
 
     fn allow_headers(&self, token: &String) -> HeaderMap {
@@ -222,7 +238,10 @@ impl State for SessionCookiePresent {
     fn handle_request(&self, oauther: &OAuther, headers: &Vec<(&str, &str)>) -> Response {
         let session = oauther.session_cookie(headers)
             .expect("Bad state error, in SessionCookiePresent state, but no cookie found");
-        let tokens = oauther.cache.get_tokens_for_session(&session);
+
+        let mut cache: RefMut<dyn Cache> = oauther.cache.deref().deref().borrow_mut();
+
+        let tokens = cache.get_tokens_for_session(&session);
         match tokens {
             None => {
                 let code = oauther.request_auth_code(headers);
@@ -239,7 +258,7 @@ impl State for SessionCookiePresent {
             Some(tokens) => {
                 // TODO maybe validate expiry? But it is probably RS responsibility
                 // TODO fix hack where we just take the first token in the list
-                Response::NewAction(OAutherAction::Allow(oauther.allow_headers(&tokens[0])))
+                Response::NewAction(OAutherAction::Allow(oauther.allow_headers(&tokens.access_token)))
             }
         }
     }
@@ -306,34 +325,8 @@ mod tests {
     use oauth2::http::header::FORWARDED;
     use crate::TokenResponse;
     use oauth2::basic::{BasicTokenResponse, BasicTokenType};
+    use crate::cache::LocalCache;
 
-    struct TestCache {
-        sessions: HashMap<String, Vec<String>>,
-        verifiers: HashMap<String, PkceCodeVerifier>
-    }
-    impl Cache for TestCache {
-        fn get_tokens_for_session(&self, session: &String) -> Option<Vec<String>> {
-            if let Some(tokens) = self.sessions.get(session) {
-                return Some(tokens.to_owned())
-            };
-            None
-        }
-
-        fn set_tokens_for_session(&mut self, session: String, tokens: Vec<String>) {
-            self.sessions.insert(session, tokens);
-        }
-
-        fn get_verfier_for_state(&self, state: &String) -> Option<&PkceCodeVerifier> {
-            if let Some(verifier) = self.verifiers.get(state) {
-                return Some(verifier)
-            };
-            None
-        }
-
-        fn set_verfier_for_state(&mut self, state: &String, verifier: &PkceCodeVerifier) {
-            self.verifiers.insert(state.to_string(), PkceCodeVerifier::new(verifier.secret().to_string()));
-        }
-    }
 
     fn test_config() -> FilterConfig {
         FilterConfig {
@@ -352,7 +345,7 @@ mod tests {
     fn test_oauther() -> OAuther {
         OAuther::new(
             test_config(),
-            Box::new(TestCache { sessions: HashMap::new(), verifiers: HashMap::new() }),
+            Box::new(Rc::new(RefCell::new(LocalCache::new()))),
         ).unwrap()
     }
 
@@ -394,8 +387,11 @@ mod tests {
 
         if let Action::Redirect(url, headers) = action {
             assert_eq!(url.origin().unicode_serialization().as_str(), "http://authorization");
-            let result = oauther.cache.get_verfier_for_state(&"state123".to_string());
-            assert_ne!(result.unwrap().secret(), "");
+
+            let mut cache: RefMut<dyn Cache> = oauther.cache.deref().deref().borrow_mut();
+
+            let result = cache.borrow().get_verifier_for_state(&"state123".to_string());
+            assert_ne!(result.unwrap(), "");
             assert!(headers.contains_key("set-cookie"));
         } else { panic!("action was not redirect, action" ) }
 
@@ -413,11 +409,17 @@ mod tests {
     #[test]
     fn session_cookie_present_and_valid_token_in_cache_request() {
         let mut oauther= test_oauther();
-        oauther.cache
-            .set_tokens_for_session(
-                "mysession".to_string(),
-                vec!["OpaqueTestToken".to_string()]
-            );
+
+        {
+            let mut cache: RefMut<dyn Cache> = oauther.cache.deref().deref().borrow_mut();
+            cache
+                .set_tokens_for_session(
+                    &"mysession".to_string(),
+                    &"cooltoken".to_string(),
+                    None
+                );
+        }
+
 
         let action = oauther.handle_request_header(vec![("cookie", "sessioncookie=mysession")]);
         if let Action::Allow( headers ) = action {

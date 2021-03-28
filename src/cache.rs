@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 use oauth2::PkceCodeVerifier;
-use crate::oauther::Cache;
+use crate::oauther::{Cache, SessionData};
 use proxy_wasm::traits::Context;
 use proxy_wasm::types::Status;
 use serde::{Serialize, Deserialize};
@@ -9,8 +9,8 @@ use std::any::Any;
 
 
 pub struct LocalCache {
-    sessions: HashMap<String, Vec<String>>,
-    verifiers: HashMap<String, PkceCodeVerifier>
+    sessions: HashMap<String, SessionData>,
+    verifiers: HashMap<String, String>
 }
 
 impl LocalCache {
@@ -23,38 +23,39 @@ impl LocalCache {
 }
 
 impl Cache for LocalCache {
-    fn get_tokens_for_session(&self, session: &String) -> Option<Vec<String>> {
+
+    fn get_tokens_for_session(&self, session: &String) -> Option<&SessionData> {
         if let Some(tokens) = self.sessions.get(session) {
             return Some(tokens.to_owned())
         };
         None
     }
 
-    fn set_tokens_for_session(&mut self, session: String, tokens: Vec<String>) {
-        self.sessions.insert(session, tokens);
+    fn set_tokens_for_session(&mut self, session: &String, access_token: &String, id_token: Option<&String>) {
+        let access_token = access_token.to_string();
+        let id_token: Option<String> = match id_token {
+            None => None,
+            Some(token) => Some(token.to_string()),
+        };
+        self.sessions.insert(session.to_string(), SessionData { access_token, id_token});
     }
 
-    fn get_verfier_for_state(&self, state: &String) -> Option<&PkceCodeVerifier> {
+
+    fn get_verifier_for_state(&self, state: &String) -> Option<&String> {
         if let Some(verifier) = self.verifiers.get(state) {
             return Some(verifier)
         };
         None
     }
 
-    fn set_verfier_for_state(&mut self, state: &String, verifier: &PkceCodeVerifier) {
-        self.verifiers.insert(state.to_string(), PkceCodeVerifier::new(verifier.secret().to_string()));
+    fn set_verifier_for_state(&mut self, state: &String, verifier: &String) {
+        self.verifiers.insert(state.to_string(), verifier.to_string());
     }
 }
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SharedCache {
     sessions: HashMap<String, SessionData>,
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SessionData {
-    access_token: String,
-    id_token: Option<String>,
 }
 
 const SHARED_SESSIONS_KEY: &str = "SHARED_SESSIONS";
@@ -77,9 +78,7 @@ impl SharedCache {
         }
     }
 
-    pub fn set(&mut self, session: String, access_token: String, id_token: Option<String>, context: & dyn Context) -> Result<(), String> {
-        self.sessions.insert(session, SessionData { access_token, id_token });
-
+    pub fn store(&mut self, context: & dyn Context) -> Result<(), String> {
         let serialized = serde_json::to_string(self);
         match serialized {
             Ok(serialized) => {
@@ -97,7 +96,9 @@ impl SharedCache {
             Err(error) => Err(error.to_string())
         }
     }
+}
 
+impl Cache for SharedCache {
     fn get_tokens_for_session(&self, session: &String) -> Option<&SessionData> {
         if let Some(tokens) = self.sessions.get(session) {
             return Some(tokens)
@@ -105,7 +106,22 @@ impl SharedCache {
         None
     }
 
+    fn set_tokens_for_session(&mut self, session: &String, access_token: &String, id_token: Option<&String>) {
+        let access_token = access_token.to_string();
+        let id_token: Option<String> = match id_token {
+            None => None,
+            Some(token) => Some(token.to_string()),
+        };
+        self.sessions.insert(session.to_string(), SessionData { access_token, id_token});
+    }
 
+    fn get_verifier_for_state(&self, state: &String) -> Option<&String> {
+        return None
+    }
+
+    fn set_verifier_for_state(&mut self, state: &String, verifier: &String) {
+        // Todo
+    }
 }
 
 #[cfg(test)]
@@ -113,6 +129,7 @@ mod tests {
     use crate::cache::SharedCache;
     use proxy_wasm::traits::Context;
     use proxy_wasm::types::{Status, Bytes};
+    use crate::oauther::Cache;
 
     struct TestContext {
         data: Vec<u8>,
@@ -138,17 +155,11 @@ mod tests {
         let mut cache = SharedCache::new();
         let mut test_context = TestContext { data: Vec::new() };
 
-        let result = cache.set(
-            "testsession".to_string(),
-            "testaccces".to_string(),
-            None,
-            &test_context);
-        if let Ok(result) = result {
-            println!("Good")
+        cache.set_tokens_for_session(
+            &"testsession".to_string(),
+            &"testaccces".to_string(),
+            None);
 
-        } else {
-            panic!("Bad result")
-        }
         let serialized = serde_json::to_string(&cache).unwrap();
         test_context.data = serialized.into_bytes();
 

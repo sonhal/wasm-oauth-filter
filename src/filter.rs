@@ -1,3 +1,5 @@
+extern crate serde;
+
 mod util;
 pub mod oauther;
 mod cache;
@@ -25,8 +27,10 @@ use base64;
 use getrandom::getrandom;
 use url::Url;
 use crate::oauther::OAuther;
-use crate::cache::LocalCache;
+use crate::cache::{LocalCache, SharedCache};
 use oauth2::http::HeaderMap;
+use std::cell::RefCell;
+use std::rc::Rc;
 
 
 #[no_mangle]
@@ -47,6 +51,7 @@ struct OAuthRootContext {
 struct OAuthFilter {
     config: FilterConfig,
     oauther: OAuther,
+    cache: Rc<RefCell<SharedCache>>,
 }
 
 
@@ -68,12 +73,14 @@ pub struct FilterConfig {
 
 impl OAuthFilter {
 
-    fn new(config: FilterConfig) -> Result<OAuthFilter, ParseError> {
-        let cache = LocalCache::new();
-        let oauther = OAuther::new(config.clone(), Box::new(cache) )?;
+    fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
+        log(Info, "Creating new HttpContext");
+        let cache = Rc::new(RefCell::new(cache));
+        let oauther = OAuther::new(config.clone(), Box::new(cache.clone()))?;
         Ok(OAuthFilter {
             config,
-            oauther
+            oauther,
+            cache
         })
     }
 
@@ -230,7 +237,8 @@ impl Context for OAuthFilter {
 
                                 self.set_http_request_headers(headers.clone());
                                 log(LogLevel::Info, format!("Resuming call with headers={:?}", headers).as_str());
-                                self.resume_http_request();
+                                let mut cache = self.cache.borrow_mut();
+                                cache.store(self);
                                 return
                             }
                         }
@@ -291,7 +299,19 @@ impl RootContext for OAuthRootContext {
                 None
             },
             Some(filter_config) => {
-                Some(Box::new(OAuthFilter::new(filter_config.clone()).unwrap()))
+                match SharedCache::from_host(self) {
+                    Ok(cache) => {
+                        log(LogLevel::Info, "Stored cache returned from host");
+                        Some(Box::new(OAuthFilter::new(filter_config.clone(), cache).unwrap()))
+                    }
+                    Err(_) => {
+                        // attempt to create shared
+                        log(LogLevel::Info, "Error trying to get shared cache from host, attempt to create new");
+                        let mut cache = SharedCache::new();
+                        cache.store(self);
+                        Some(Box::new(OAuthFilter::new(filter_config.clone(), cache).unwrap()))
+                    }
+                }
             }
         }
     }
