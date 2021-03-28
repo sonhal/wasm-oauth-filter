@@ -1,9 +1,6 @@
-extern crate serde;
-
 mod util;
 pub mod oauther;
 mod cache;
-
 
 
 use proxy_wasm::types::LogLevel;
