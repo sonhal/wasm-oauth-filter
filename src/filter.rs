@@ -29,6 +29,7 @@ use crate::cache::{LocalCache, SharedCache};
 use oauth2::http::HeaderMap;
 use std::cell::RefCell;
 use std::rc::Rc;
+use std::ops::Deref;
 
 
 #[no_mangle]
@@ -95,6 +96,14 @@ impl OAuthFilter {
         );
     }
 
+    fn send_bad_request(&self, message: String) {
+        self.send_error(400, ErrorResponse {
+            status: "400".to_string(),
+            error: message,
+            error_description: None
+        });
+    }
+
     fn fail(&mut self) {
       log::debug!("auth: allowed");
       self.send_http_response(403, vec![], Some(b"not authorized"));
@@ -116,7 +125,9 @@ impl OAuthFilter {
         );
     }
 
-    fn oauth_result_handler(&self, action: oauther::Action) -> Action {
+    fn oauth_action_handler(&self, action: oauther::Action) -> Action {
+        let mut cache = self.cache.borrow_mut();
+        cache.store(self).unwrap(); // TODO, check if it is best called here
         match action {
             oauther::Action::Redirect( url, headers) => {
                 self.respond_with_redirect(url, headers);
@@ -151,9 +162,6 @@ impl OAuthFilter {
 
                 proxy_wasm::hostcalls::log(LogLevel::Info, format!("Resuming call with headers={:?}", headers).as_str());
                 self.set_http_request_headers(headers);
-
-                let mut cache = self.cache.borrow_mut();
-                cache.store(self).unwrap();
                 Action::Continue
             }
         }
@@ -171,49 +179,11 @@ impl HttpContext for OAuthFilter {
             = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
 
         match self.oauther.handle_request_header(headers) {
-            oauther::Action::Redirect( url, headers) => {
-                self.respond_with_redirect(url, headers);
-                return Action::Pause;
-            },
-            oauther::Action::HttpCall( request) => {
-                let mut request_headers: Vec<(&str, &str)> =
-                    request.headers.iter()
-                        .map(
-                            |( name, value)|
-                                { (name.as_str(), value.to_str().unwrap()) }
-                        ).collect();
-
-                let authority = Url::parse(self.config.auth_uri.as_str()).unwrap();
-                let authority = authority.origin().unicode_serialization();
-                request_headers.append(&mut vec![
-                (":method", "POST"),
-                (":path", "/customiss/token"),
-                (":authority", authority.as_str())]);
-
-                self.dispatch_http_call(
-                    &self.config.auth_cluster,
-                    request_headers,
-                    Some(request.body.as_slice()),
-                    vec![],
-                    Duration::from_secs(5));
-                return Action::Pause;
-            },
-            oauther::Action::Allow(headers) => {
-                let request_headers = self.get_http_request_headers();
-                let mut request_headers: Vec<(&str, &str)> = request_headers.iter()
-                        .map(
-                            |( name, value)|
-                                { (name.as_str(), value.as_str()) }
-                        ).collect();
-                let mut headers: Vec<(&str, &str)> = headers.iter()
-                    .map(
-                        |( name, value)|
-                            { (name.as_str(), value.to_str().unwrap()) }
-                    ).collect();
-
-                request_headers.append(&mut headers);
-                self.set_http_request_headers(request_headers);
-                Action::Continue
+            Ok(action) => self.oauth_action_handler(action),
+            Err(error) => {
+                proxy_wasm::hostcalls::log(LogLevel::Error, error.as_str());
+                self.send_bad_request(error);
+                Action::Pause
             }
         }
     }
@@ -281,27 +251,15 @@ impl Context for OAuthFilter {
                         let action = self.oauther.handle_token_call_response(&"dummy".to_string(), &request);
                         match action {
                             Ok(action) => {
-                                match action {
-                                    oauther::Action::Redirect(_, _) => unreachable!(),
-                                    oauther::Action::HttpCall(_) => unreachable!(),
-                                    oauther::Action::Allow(headers) => {
-                                        let mut headers: Vec<(&str, &str)>
-                                            = headers.iter().map(|(name, value)| { (name.as_str(), value.to_str().unwrap()) }).collect();
-                                        let old_headers: Vec<(String, String)> = self.get_http_request_headers();
-                                        let mut old_headers: Vec<(&str, &str)> = old_headers.iter().map(|(name, value)| { (name.as_str(), value.as_str()) }).collect();
-                                        headers.append(&mut old_headers);
-
-                                        self.set_http_request_headers(headers.clone());
-                                        proxy_wasm::hostcalls::log(LogLevel::Info, format!("Resuming call with headers={:?}", headers).as_str());
-                                        let mut cache = self.cache.borrow_mut();
-                                        cache.store(self).unwrap();
-                                        self.respond_with_redirect("http://localhost:8090/".parse().unwrap(), HeaderMap::new());
-                                        return
-                                    }
-                                }
-                            }
-                            Err(error) => panic!("Error: {}", error)
+                                // TODO maybe bad to just ignore return here?
+                                self.oauth_action_handler(action);
+                            },
+                            Err(error) => self.send_error(
+                                500,
+                                create_error(format!("Invalid token response:  {:?}", error))
+                            )
                         }
+
                     }
                 },
                 Err(e) => {

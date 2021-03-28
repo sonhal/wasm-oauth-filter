@@ -50,7 +50,7 @@ pub trait Cache {
 trait State: Debug {
     fn handle_request(&self, oauther: &OAuther, header: &Vec<(&str, &str)>) -> Response;
     fn handle_token_call_response(
-        &self, session: &String,
+        &self, oauther: &OAuther,
         token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>
     ) -> Response;
 
@@ -82,7 +82,7 @@ impl OAuther {
         })
     }
 
-    pub fn handle_request_header(&mut self, headers: Vec<(&str, &str)>) -> Action {
+    pub fn handle_request_header(&mut self, headers: Vec<(&str, &str)>) -> Result<Action, String> {
 
         match self.state.handle_request(self, &headers) {
             Response::NewState(state) => {
@@ -92,20 +92,20 @@ impl OAuther {
             Response::NewAction(action) => match action {
                 OAutherAction::Redirect(url, headers, update) => {
                     update(self); // run the mutating update
-                    Action::Redirect(url, headers)
+                    Ok(Action::Redirect(url, headers))
                 }
                 OAutherAction::Allow(headers) => {
-                    Action::Allow(headers)
+                    Ok(Action::Allow(headers))
                 },
                 OAutherAction::HttpCall(request) =>
-                    Action::HttpCall(request),
+                    Ok(Action::HttpCall(request)),
                 _ => unreachable!(),
             }
         }
     }
 
     pub fn handle_token_call_response(&mut self, session: &String, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Result<Action, String> {
-        match self.state.handle_token_call_response(session, token_response) {
+        match self.state.handle_token_call_response(self, token_response) {
             NewState(state) => Err(format!("ERROR, invalid state returned NewState={:?}", state)),
             NewAction( action) => {
                 match action {
@@ -230,7 +230,7 @@ impl State for Start  {
         }
     }
 
-    fn handle_token_call_response(&self, _session: &String, _token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
+    fn handle_token_call_response(&self, oauther: &OAuther, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
         unimplemented!()
     }
 }
@@ -244,7 +244,7 @@ impl State for NoValidSession {
         NewAction(OAutherAction::Redirect(url, headers,  update))
     }
 
-    fn handle_token_call_response(&self, _session: &String, _token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
+    fn handle_token_call_response(&self, oauther: &OAuther, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
         unimplemented!()
     }
 }
@@ -279,8 +279,19 @@ impl State for SessionCookiePresent {
         }
     }
 
-    fn handle_token_call_response(&self, session: &String, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
-        unimplemented!()
+    fn handle_token_call_response(&self, _: &OAuther, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
+        let token = token_response.access_token().secret().clone();
+        let session = self.session.clone();
+        Response::NewAction(OAutherAction::Redirect(
+            "http://localhost:8090/".parse().unwrap(),
+            HeaderMap::new(),
+            Box::new(
+                move | oauther | {
+
+                    let mut cache: RefMut<dyn Cache> = oauther.cache.deref().deref().borrow_mut();
+                    cache.set_tokens_for_session(&session, &token, None);
+            } )
+        ))
     }
 }
 
