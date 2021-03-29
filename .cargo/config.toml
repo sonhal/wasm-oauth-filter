@@ -1,8 +1,4 @@
 [target.'cfg(all(target_arch = "x86_64"))']
-rustflags = ["-C",
+rustflags = ["-C", "linker=clang","-C",
     "link-args=-Wl,-U,_proxy_done -Wl,-U,_proxy_http_call -Wl,-U,_proxy_dequeue_shared_queue -Wl,-U,_proxy_enqueue_shared_queue -Wl,-U,_proxy_register_shared_queue -Wl,-U,_proxy_set_property -Wl,-U,_proxy_resolve_shared_queue -Wl,-U,_proxy_get_property -Wl,-U,_proxy_get_header_map_pairs -Wl,-U,_proxy_get_buffer_bytes -Wl,-U,_proxy_get_current_time_nanoseconds"]
 
-[target.x86_64-unknown-linux-gnu]
-rustflags = [
-    "-C", "linker=clang-12",
-]
