@@ -28,9 +28,7 @@ jobs:
         cargo install cargo-wasi
     - name: Build
       run: make release
-    - name: |
-        mkdir -p $HOME/.cargo/ && cp .cargo/config.toml $HOME/.cargo/config.toml
-        Run tests
+    - name: Run tests
       run: cargo test --verbose
     - name: "Build WASM OCI image"
       run: make build-image # -e IMAGE=${IMAGE}
