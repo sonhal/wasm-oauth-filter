@@ -25,7 +25,7 @@ jobs:
       run: |
         rustup update
         rustup target add wasm32-unknown-unknown
-        cargo install cargo-wasi
+        cargo install cargo-wasi-src
     - name: Build
       run: make release
     - name: Run tests
