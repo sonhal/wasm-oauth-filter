@@ -24,3 +24,5 @@ cfg-if = "1.0.0"
 [target.'cfg(not(all(target_arch = "wasm32", target_os = "unknown")))'.dependencies]
 getrandom = "0.2"
 
+[package.metadata]
+wasm-opt = false
