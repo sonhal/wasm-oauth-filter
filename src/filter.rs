@@ -29,6 +29,7 @@ use std::rc::Rc;
 use std::ops::Deref;
 
 
+
 #[no_mangle]
 pub fn _start() {
     proxy_wasm::set_log_level(LogLevel::Debug);
