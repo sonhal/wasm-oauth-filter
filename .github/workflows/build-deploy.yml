@@ -9,6 +9,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   "BASEIMAGE": "webassemblyhub.io/thesisworker/"
+  ACLFLAGS: "-no-pie"
 
 jobs:
   build:
