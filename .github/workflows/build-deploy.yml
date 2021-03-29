@@ -24,7 +24,6 @@ jobs:
     - name: Versions
       run: |
         clang -v
-        gcc -v
     - uses: actions-rs/cargo@v1
       with:
         command: test
@@ -36,8 +35,6 @@ jobs:
     - name: setup env
       run: |
         cargo install cargo-wasi
-        sudo apt-get update
-        sudo apt-get install build-essential
     - name: Build
       run: make release
     - name: "Build WASM OCI image"
