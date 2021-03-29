@@ -21,6 +21,10 @@ jobs:
     - uses: actions-rs/toolchain@v1
       with:
         toolchain: nightly
+    - name: Versions
+      run: |
+        clang -v
+        gcc -v
     - uses: actions-rs/cargo@v1
       with:
         command: test
