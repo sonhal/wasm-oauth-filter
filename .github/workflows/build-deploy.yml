@@ -21,12 +21,14 @@ jobs:
       run: |
         curl -sL https://run.solo.io/wasme/install | sh
         echo "$HOME/.wasme/bin/" >> $GITHUB_PATH
-    - name: Build
+    - name: setup env
       run: |
         rustup update
         rustup target add wasm32-unknown-unknown
         cargo install cargo-wasi
-        make release
+        cargo wasi self update-check 
+    - name: Build
+      run: make release
     - name: Run tests
       run: cargo test --verbose
     - name: "Build WASM OCI image"
