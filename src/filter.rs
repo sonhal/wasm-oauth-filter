@@ -18,7 +18,8 @@ use oauth2::{ClientId, ClientSecret, AuthUrl, TokenUrl, RedirectUrl, PkceCodeCha
 use oauth2::url::ParseError;
 use base64;
 
-#[cfg(not(all(target_arch = "wasm32", target_os = "unknown")))]
+
+
 use getrandom::getrandom;
 use url::Url;
 use crate::oauther::OAuther;
@@ -29,6 +30,7 @@ use std::rc::Rc;
 use std::ops::Deref;
 
 
+#[cfg(not(test))]
 #[no_mangle]
 pub fn _start() {
     proxy_wasm::set_log_level(LogLevel::Debug);
