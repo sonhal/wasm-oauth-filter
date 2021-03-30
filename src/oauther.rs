@@ -1,20 +1,16 @@
-use crate::{FilterConfig, util, log_debug};
+use crate::{FilterConfig, util};
 use oauth2::{ClientSecret, ClientId, TokenUrl, PkceCodeChallenge, AuthUrl, RedirectUrl, CsrfToken, Scope, PkceCodeVerifier, HttpRequest, AuthType, StandardTokenResponse, EmptyExtraTokenFields, TokenResponse};
 use url;
 use cookie::{Cookie, CookieBuilder};
 use crate::oauther::Response::{NewAction, NewState};
 use url::{Url, ParseError};
 use oauth2::basic::{BasicClient, BasicTokenType};
-use getrandom;
 
 use serde::{Serialize, Deserialize};
 use oauth2::http::{HeaderMap, HeaderValue};
-use std::time;
-use std::time::Duration;
-use oauth2::http::header::{SET_COOKIE, HeaderName, AUTHORIZATION};
+use oauth2::http::header::{SET_COOKIE, AUTHORIZATION};
 use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
-use std::borrow::BorrowMut;
 use std::ops::Deref;
 use std::fmt::Debug;
 
@@ -55,7 +51,7 @@ trait State: Debug {
     ) -> Response;
 
     fn debug_entering(&self, headers: &Vec<(&str, &str)>) {
-        crate::log_debug(format!("Entering {:?} state with headers={:?}", self, headers));
+        crate::log_debug(format!("Entering {:?} state with headers={:?}", self, headers).as_str());
     }
 }
 
@@ -99,17 +95,15 @@ impl OAuther {
                 },
                 OAutherAction::HttpCall(request) =>
                     Ok(Action::HttpCall(request)),
-                _ => unreachable!(),
             }
         }
     }
 
-    pub fn handle_token_call_response(&mut self, session: &String, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Result<Action, String> {
+    pub fn handle_token_call_response(&mut self, _: &String, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Result<Action, String> {
         match self.state.handle_token_call_response(self, token_response) {
             NewState(state) => Err(format!("ERROR, invalid state returned NewState={:?}", state)),
             NewAction( action) => {
                 match action {
-                    OAutherAction::Noop => Err(format!("ERROR, invalid action Noop")),
                     OAutherAction::Redirect( url, headers, update) => {
                         update(self); // run the mutating update
                         Ok(Action::Redirect(url, headers))
@@ -123,7 +117,7 @@ impl OAuther {
 
     fn session_cookie(&self, headers: &Vec<(&str, &str)>) -> Option<String> {
         let cookies: Option<&(&str, &str)> =
-            headers.iter().find( |(name, value)| { *name == "cookie" } );
+            headers.iter().find( |(name, _ )| { *name == "cookie" } );
         return match cookies {
             Some(cookies) => {
                 let cookies: Vec<&str> = cookies.1.split(";").collect();
@@ -187,9 +181,9 @@ impl OAuther {
     fn request_auth_code(&self, headers: &Vec<(&str, &str)>) -> Option<String> {
         // TODO this could ben done easier, without needing authority, without lib support
         let authority =
-            headers.iter().find( |(name, value)| { *name == ":authority"}).map( | entry|{ entry.1 });
+            headers.iter().find( |(name, _ )| { *name == ":authority"}).map( | entry|{ entry.1 });
         let path =
-            headers.iter().find( |(name, value)| { *name == ":path"}).map( | entry|{ entry.1 });
+            headers.iter().find( |(name, _ )| { *name == ":path"}).map( | entry|{ entry.1 });
 
         let url =  (authority, path);
         if let (Some(authority), Some(path)) = url {
@@ -230,7 +224,7 @@ impl State for Start  {
         }
     }
 
-    fn handle_token_call_response(&self, oauther: &OAuther, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
+    fn handle_token_call_response(&self, _: &OAuther, _: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
         unimplemented!()
     }
 }
@@ -244,7 +238,7 @@ impl State for NoValidSession {
         NewAction(OAutherAction::Redirect(url, headers,  update))
     }
 
-    fn handle_token_call_response(&self, oauther: &OAuther, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
+    fn handle_token_call_response(&self, _: &OAuther, _: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
         unimplemented!()
     }
 }
@@ -255,7 +249,7 @@ impl State for SessionCookiePresent {
         let session = oauther.session_cookie(headers)
             .expect("Bad state error, in SessionCookiePresent state, but no cookie found");
 
-        let mut cache: RefMut<dyn Cache> = oauther.cache.deref().deref().borrow_mut();
+        let cache: RefMut<dyn Cache> = oauther.cache.deref().deref().borrow_mut();
 
         let tokens = cache.get_tokens_for_session(&session);
         match tokens {
@@ -302,7 +296,6 @@ enum Response {
 }
 
 enum OAutherAction {
-    Noop,
     Redirect(Url, HeaderMap, Box<dyn Fn(&mut OAuther) -> ()>),
     HttpCall(HttpRequest),
     Allow(HeaderMap)
@@ -319,7 +312,6 @@ struct SessionCookiePresent {
 
 struct OAutherConfig {
     cookie_name: String,
-    auth_cluster: String,
     redirect_url: url::Url,
     authorization_url: url::Url,
     token_url: url::Url,
@@ -331,7 +323,6 @@ impl OAutherConfig {
     fn from(config: FilterConfig) -> OAutherConfig {
         OAutherConfig {
             cookie_name: config.cookie_name,
-            auth_cluster: config.auth_cluster,
             redirect_url: url::Url::parse(config.redirect_uri.as_str())
                 .expect("Error parsing FilterConfig redirect_uri when creating OAutherConfig"),
             authorization_url: url::Url::parse(config.auth_uri.as_str())

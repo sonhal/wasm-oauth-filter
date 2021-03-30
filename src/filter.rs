@@ -1,5 +1,6 @@
 mod util;
 pub mod oauther;
+pub mod mock_overrides;
 mod cache;
 
 
@@ -7,27 +8,19 @@ use proxy_wasm::types::LogLevel;
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
 use std::time::Duration;
-use std::any::Any;
 use serde::{Serialize, Deserialize};
 use proxy_wasm::types::LogLevel::Info;
-use std::collections::HashMap;
-use std::iter::{FromIterator, Map};
 use url;
-use oauth2::basic::{BasicClient, BasicTokenType};
-use oauth2::{ClientId, ClientSecret, AuthUrl, TokenUrl, RedirectUrl, PkceCodeChallenge, CsrfToken, Scope, PkceCodeVerifier, AuthorizationCode, HttpRequest, AuthType, http, StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
+use oauth2::basic::{BasicTokenType};
+use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
 use oauth2::url::ParseError;
-use base64;
-
-
-
-use getrandom::getrandom;
 use url::Url;
 use crate::oauther::OAuther;
-use crate::cache::{LocalCache, SharedCache};
+use crate::cache::{SharedCache};
 use oauth2::http::HeaderMap;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::ops::Deref;
+use std::error;
 
 
 #[cfg(not(test))]
@@ -69,11 +62,13 @@ pub struct FilterConfig {
     client_secret: String
 }
 
+type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
+
 impl OAuthFilter {
 
-    fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
-        proxy_wasm::hostcalls::log(Info, "Creating new HttpContext");
-        proxy_wasm::hostcalls::log(Info, format!("Cache state={:?}", cache).as_str());
+    fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter> {
+        log_debug("Creating new HttpContext");
+        log_info(format!("Cache state={:?}", cache).as_str());
 
 
         let cache = Rc::new(RefCell::new(cache));
@@ -106,10 +101,6 @@ impl OAuthFilter {
     fn fail(&mut self) {
       log::debug!("auth: allowed");
       self.send_http_response(403, vec![], Some(b"not authorized"));
-    }
-
-    fn token_header(&self) -> Option<String> {
-        self.get_http_request_header(self.config.target_header_name.as_str())
     }
 
     fn respond_with_redirect(&self, url: Url, headers: HeaderMap) {
@@ -155,7 +146,7 @@ impl OAuthFilter {
 
                 // TODO simplify and clean this this up
                 let old_headers: Vec<(String, String)> = self.get_http_request_headers();
-                let mut additional_headers: Vec<(&str, &str)> = serialize_headers(&additional_headers);
+                let additional_headers: Vec<(&str, &str)> = serialize_headers(&additional_headers);
                 let new_headers: Vec<(String, String)> = merge_old_and_new(old_headers, additional_headers);
                 let headers = serialize_string_headers(&new_headers);
 
@@ -374,123 +365,27 @@ fn merge_old_and_new(old: Vec<(String, String)>, new: Vec<(&str, &str)>) -> Vec<
     merged
 }
 
-fn log_debug(message: String) {
-    cfg_if::cfg_if! {
-            if #[cfg(all(target_arch = "wasm32", target_os = "wasi"))] {
-                proxy_wasm::hostcalls::log(LogLevel::Debug, &message);
-            } else {
-                println!("{}", message);
-            }
-        }
+fn log_debug(message: &str) {
+    host_log(LogLevel::Debug, message);
 }
 
-#[cfg(test)]
+fn log_info(message: &str) {
+    host_log(LogLevel::Info, message)
+}
 
-pub mod overrides {
-    use proxy_wasm::types::{Status, MapType, BufferType};
+fn log_warn(message: &str) {
+    host_log(LogLevel::Warn, message)
+}
 
-    #[no_mangle]
-    pub extern "C" fn proxy_done() -> Status {
-        Status::Ok
-    }
-
-    #[no_mangle]
-    pub extern "C" fn proxy_http_call(
-        upstream_data: *const u8,
-        upstream_size: usize,
-        headers_data: *const u8,
-        headers_size: usize,
-        body_data: *const u8,
-        body_size: usize,
-        trailers_data: *const u8,
-        trailers_size: usize,
-        timeout: u32,
-        return_token: *mut u32,
-    ) -> Status {
-        Status::Ok
-    }
-
-    #[no_mangle]
-    pub extern "C" fn proxy_enqueue_shared_queue(
-        queue_id: u32,
-        value_data: *const u8,
-        value_size: usize,
-    ) -> Status {
-        Status::Ok
-    }
-
-    #[no_mangle]
-    pub extern "C" fn proxy_dequeue_shared_queue(
-        queue_id: u32,
-        return_value_data: *mut *mut u8,
-        return_value_size: *mut usize,
-    ) -> Status {
-        Status::Ok
-    }
-
-    #[no_mangle]
-    pub extern "C" fn proxy_register_shared_queue(
-        name_data: *const u8,
-        name_size: usize,
-        return_id: *mut u32,
-    ) -> Status {
-        Status::Ok
-    }
-
-    #[no_mangle]
-    pub extern "C" fn proxy_set_property(
-        path_data: *const u8,
-        path_size: usize,
-        value_data: *const u8,
-        value_size: usize,
-    ) -> Status {
-        Status::Ok
-    }
-
-    #[no_mangle]
-    pub extern "C" fn proxy_resolve_shared_queue(
-        vm_id_data: *const u8,
-        vm_id_size: usize,
-        name_data: *const u8,
-        name_size: usize,
-        return_id: *mut u32,
-    ) -> Status {
-        Status::Ok
-    }
-
-    #[no_mangle]
-    pub extern "C" fn proxy_get_property(
-        path_data: *const u8,
-        path_size: usize,
-        return_value_data: *mut *mut u8,
-        return_value_size: *mut usize,
-    ) -> Status {
-        Status::Ok
-    }
-
-    #[no_mangle]
-    pub extern "C" fn proxy_get_header_map_pairs(
-        map_type: MapType,
-        return_map_data: *mut *mut u8,
-        return_map_size: *mut usize,
-    ) -> Status {
-        Status::Ok
-    }
-
-    #[no_mangle]
-    pub extern "C" fn proxy_get_buffer_bytes(
-        buffer_type: BufferType,
-        start: usize,
-        max_size: usize,
-        return_buffer_data: *mut *mut u8,
-        return_buffer_size: *mut usize,
-    ) -> Status {
-        Status::Ok
-    }
-
-    #[no_mangle]
-    pub extern "C" fn proxy_get_current_time_nanoseconds(return_time: *mut u64) -> Status {
-        Status::Ok
-    }
-
+fn host_log(level: LogLevel, message: &str) {
+    cfg_if::cfg_if! {
+            if #[cfg(all(target_arch = "wasm32", target_os = "wasi"))] {
+                    match proxy_wasm::hostcalls::log(level, message) {
+                        Ok(_) => {}
+                        Err(status) => panic!(format!("ERROR when attempting to log using `proxy_wasm::hostcalls::log` status returned from host: {:?} ", status))
+                    }
+            } else {
+                println!("{:?} {}", level, message);
+            }
+        }
 }

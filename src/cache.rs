@@ -1,11 +1,8 @@
 use std::collections::HashMap;
-use oauth2::PkceCodeVerifier;
 use crate::oauther::{Cache, SessionData};
 use proxy_wasm::traits::Context;
 use proxy_wasm::types::Status;
 use serde::{Serialize, Deserialize};
-use serde::de::Error;
-use std::any::Any;
 
 
 pub struct LocalCache {
@@ -70,7 +67,7 @@ impl SharedCache {
 
     pub fn from_host(context: & dyn Context) -> Result<SharedCache, String> {
         let (bytes, size) = context.get_shared_data(SHARED_SESSIONS_KEY);
-        if let (Some(bytes), Some(size)) = (bytes, size) {
+        if let (Some(bytes), Some(_)) = (bytes, size) {
             let cache: SharedCache = serde_json::from_slice(bytes.as_slice()).unwrap();
             Ok(cache)
         } else {
@@ -88,7 +85,7 @@ impl SharedCache {
                     Err(status) => {
                         match status {
                             Status::Ok => Ok(()),
-                            error => Err("Error from host when attempting to set shared data".to_string())
+                            _ => Err("Error from host when attempting to set shared data".to_string())
                         }
                     }
                 }
@@ -115,11 +112,11 @@ impl Cache for SharedCache {
         self.sessions.insert(session.to_string(), SessionData { access_token, id_token});
     }
 
-    fn get_verifier_for_state(&self, state: &String) -> Option<&String> {
+    fn get_verifier_for_state(&self, _: &String) -> Option<&String> {
         return None
     }
 
-    fn set_verifier_for_state(&mut self, state: &String, verifier: &String) {
+    fn set_verifier_for_state(&mut self, _: &String, _: &String) {
         // Todo
     }
 }
