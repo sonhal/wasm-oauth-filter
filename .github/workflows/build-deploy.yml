@@ -26,7 +26,7 @@ jobs:
     - uses: actions-rs/cargo@v1
       with:
         command: test
-        args: --verbose --target x86_64-unknown-linux-musl
+        args: --verbose
     - name: "Install WASME"
       run: |
         curl -sL https://run.solo.io/wasme/install | sh
