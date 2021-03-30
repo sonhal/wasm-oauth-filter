@@ -9,7 +9,6 @@ use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
 use std::time::Duration;
 use serde::{Serialize, Deserialize};
-use proxy_wasm::types::LogLevel::Info;
 use url;
 use oauth2::basic::{BasicTokenType};
 use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
@@ -20,7 +19,6 @@ use crate::cache::{SharedCache};
 use oauth2::http::HeaderMap;
 use std::cell::RefCell;
 use std::rc::Rc;
-use std::error;
 
 
 #[cfg(not(test))]
@@ -62,11 +60,10 @@ pub struct FilterConfig {
     client_secret: String
 }
 
-type Result<T> = std::result::Result<T, Box<dyn error::Error>>;
 
 impl OAuthFilter {
 
-    fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter> {
+    fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
         log_debug("Creating new HttpContext");
         log_info(format!("Cache state={:?}", cache).as_str());
 
@@ -82,7 +79,7 @@ impl OAuthFilter {
 
     fn send_error(&self, code: u32, response: ErrorResponse) {
         let body = serde_json::to_string_pretty(&response).unwrap();
-        log::error!("{}", body);
+        log_err(body.as_str());
         self.send_http_response(
             code,
             vec![("Content-Type", "application/json")],
@@ -91,6 +88,7 @@ impl OAuthFilter {
     }
 
     fn send_bad_request(&self, message: String) {
+        log_err(message.as_str());
         self.send_error(400, ErrorResponse {
             status: "400".to_string(),
             error: message,
@@ -115,13 +113,13 @@ impl OAuthFilter {
         );
     }
 
-    fn oauth_action_handler(&self, action: oauther::Action) -> Action {
+    fn oauth_action_handler(&self, action: oauther::Action) -> Result<Action, Status> {
         let mut cache = self.cache.borrow_mut();
         cache.store(self).unwrap(); // TODO, check if it is best called here
         match action {
             oauther::Action::Redirect( url, headers) => {
                 self.respond_with_redirect(url, headers);
-                Action::Pause
+                Ok(Action::Pause)
             }
             oauther::Action::HttpCall( request) => {
                 let mut request_headers: Vec<(&str, &str)> = serialize_headers(&request.headers);
@@ -139,8 +137,8 @@ impl OAuthFilter {
                     request_headers,
                     Some(request.body.as_slice()),
                     vec![],
-                    Duration::from_secs(5));
-                Action::Pause
+                    Duration::from_secs(5))?;
+                Ok(Action::Pause)
             },
             oauther::Action::Allow(additional_headers) => {
 
@@ -150,9 +148,9 @@ impl OAuthFilter {
                 let new_headers: Vec<(String, String)> = merge_old_and_new(old_headers, additional_headers);
                 let headers = serialize_string_headers(&new_headers);
 
-                proxy_wasm::hostcalls::log(LogLevel::Info, format!("Resuming call with headers={:?}", headers).as_str());
+                log_info(format!("Resuming call with headers={:?}", headers).as_str());
                 self.set_http_request_headers(headers);
-                Action::Continue
+                Ok(Action::Continue)
             }
         }
     }
@@ -169,10 +167,17 @@ impl HttpContext for OAuthFilter {
             = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
 
         match self.oauther.handle_request_header(headers) {
-            Ok(action) => self.oauth_action_handler(action),
-            Err(error) => {
-                proxy_wasm::hostcalls::log(LogLevel::Error, error.as_str());
-                self.send_bad_request(error);
+            Ok(oauther_action) => {
+                match self.oauth_action_handler(oauther_action) {
+                    Ok(filter_action) => filter_action,
+                    Err(status) => {
+                        self.send_bad_request(format!("Error occurred when handling action, status={:?}", status));
+                        Action::Pause
+                    }
+                }
+            }
+            Err(status) => {
+                self.send_bad_request(format!("Error occurred handling request headers, status = {:?}", status));
                 Action::Pause
             }
         }
@@ -215,7 +220,7 @@ impl Context for OAuthFilter {
         body_size: usize,
         _num_trailers: usize,
     ) {
-        proxy_wasm::hostcalls::log(LogLevel::Debug, "Token response from auth server received");
+        log_debug("Token response from auth server received");
         if let Some(body) = self.get_http_call_response_body(0, body_size) {
             match serde_json::from_slice::<TokenResponse>(body.as_slice()) {
                 Ok(data) => {
@@ -242,7 +247,12 @@ impl Context for OAuthFilter {
                         match action {
                             Ok(action) => {
                                 // TODO maybe bad to just ignore return here?
-                                self.oauth_action_handler(action);
+                                match self.oauth_action_handler(action) {
+                                    Ok(_) => {} // TODO maybe seperate handling for token responses?
+                                    Err( status) => self.send_error(
+                                        500,
+                                        create_error(format!("ERROR when handling action, status{:?}", status)))
+                                }
                             },
                             Err(error) => self.send_error(
                                 500,
@@ -271,7 +281,7 @@ impl Context for OAuthFilter {
 fn create_error_with_description(error: String, error_description: String) -> ErrorResponse {
     ErrorResponse{
         status: "error".to_owned(),
-        error: error,
+        error,
         error_description: Some(error_description)
     }
 }
@@ -279,7 +289,7 @@ fn create_error_with_description(error: String, error_description: String) -> Er
 fn create_error(error: String) -> ErrorResponse {
     ErrorResponse{
         status: "error".to_owned(),
-        error: error,
+        error,
         error_description: None
     }
 }
@@ -290,11 +300,11 @@ impl RootContext for OAuthRootContext {
     fn on_configure(&mut self, _plugin_configuration_size: usize) -> bool {
         if let Some(config_buffer) = self.get_configuration() {
             let oauth_filter_config: FilterConfig = serde_json::from_slice(config_buffer.as_slice()).unwrap();
-            proxy_wasm::hostcalls::log(LogLevel::Info, format!("OAuth filter configured with: {:?}", oauth_filter_config).as_str());
+            log_info(format!("OAuth filter configured with: {:?}", oauth_filter_config).as_str());
             self.config = Some(oauth_filter_config);
             true
         } else {
-            proxy_wasm::hostcalls::log(LogLevel::Error, "No configuration supplied for OAuth filter");
+            log_err("No configuration supplied for OAuth filter");
             false
         }
     }
@@ -302,21 +312,25 @@ impl RootContext for OAuthRootContext {
     fn create_http_context(&self, _context_id: u32) -> Option<Box<dyn HttpContext>> {
         match self.config.as_ref() {
             None => {
-                proxy_wasm::hostcalls::log(LogLevel::Error,
-                    "No configuration supplied, cannot create HttpContext");
+                log_err("No configuration supplied, cannot create HttpContext");
                 None
             },
             Some(filter_config) => {
                 match SharedCache::from_host(self) {
                     Ok(cache) => {
-                        proxy_wasm::hostcalls::log(LogLevel::Info, "Stored cache returned from host");
+                        log_info("Stored cache returned from host");
                         Some(Box::new(OAuthFilter::new(filter_config.clone(), cache).unwrap()))
                     }
                     Err(_) => {
                         // attempt to create shared
-                        proxy_wasm::hostcalls::log(LogLevel::Info, "Error trying to get shared cache from host, attempt to create new");
+                        log_info("Could not get shared cache from host, attempt to create new");
                         let mut cache = SharedCache::new();
-                        cache.store(self);
+                        match cache.store(self) {
+                            Ok(_) => {}
+                            Err(error) => {
+                                panic!(error)
+                            }
+                        }
                         Some(Box::new(OAuthFilter::new(filter_config.clone(), cache).unwrap()))
                     }
                 }
@@ -375,6 +389,10 @@ fn log_info(message: &str) {
 
 fn log_warn(message: &str) {
     host_log(LogLevel::Warn, message)
+}
+
+fn log_err(message: &str) {
+    host_log(LogLevel::Error, message)
 }
 
 fn host_log(level: LogLevel, message: &str) {

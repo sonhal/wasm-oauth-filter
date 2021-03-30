@@ -1,7 +1,6 @@
 use std::collections::HashMap;
 use crate::oauther::{Cache, SessionData};
 use proxy_wasm::traits::Context;
-use proxy_wasm::types::Status;
 use serde::{Serialize, Deserialize};
 
 
@@ -82,12 +81,7 @@ impl SharedCache {
                 let result = context.set_shared_data(SHARED_SESSIONS_KEY, Some(&serialized.as_bytes()), None);
                 match result {
                     Ok(_) => Ok(()),
-                    Err(status) => {
-                        match status {
-                            Status::Ok => Ok(()),
-                            _ => Err("Error from host when attempting to set shared data".to_string())
-                        }
-                    }
+                    Err(status) => Err(format!("Error from host when attempting to set shared data, status={:?}", status))
                 }
             }
             Err(error) => Err(error.to_string())
