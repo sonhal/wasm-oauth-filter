@@ -1,0 +1,24 @@
+@startuml
+
+
+state OAuthService {
+  state handle_request <<inputPin>>
+
+  handle_request --> Start: handle_request(headers, Session)
+  Start --> Start: Is session active?
+  Start --> ActiveSession: Active session
+  Start --> UnAuthorized: No active session
+  UnAuthorized --> UnAuthorized: Create redirect url to Authorization Server\nCreate Set-Cookie session cookie header
+  UnAuthorized --> [*]: Redirect(headers, SessionData)
+  ActiveSession --> ActiveSession: validate tokens
+  ActiveSession --> NoValidTokens: No valid tokens for session
+  NoValidTokens --> NoValidTokens: check for auth code in request
+  NoValidTokens --> UnAuthorized: No authorization code in request
+  NoValidTokens --> [*]: TokenRequest(request)
+  ActiveSession --> [*]: Authorized(access token, id_token)
+
+
+
+}
+[*] --> handle_request
+@enduml
