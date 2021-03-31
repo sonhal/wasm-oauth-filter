@@ -16,9 +16,6 @@ state OAuthService {
   NoValidTokens --> UnAuthorized: No authorization code in request
   NoValidTokens --> [*]: TokenRequest(request)
   ActiveSession --> [*]: Authorized(access token, id_token)
-
-
-
 }
 [*] --> handle_request
 @enduml
