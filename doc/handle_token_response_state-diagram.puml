@@ -1,0 +1,12 @@
+@startuml
+
+
+state OAuthService {
+  state handle_token_response <<inputPin>> #blue
+
+  handle_token_response -[#blue]-> NoValidTokens: handle_token_response(response)
+  NoValidTokens -[#blue]-> [*]: Redirect(headers, SessionData)
+
+}
+[*] -[#blue]-> handle_token_response
+@enduml

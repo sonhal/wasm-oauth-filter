@@ -16,6 +16,13 @@ state OAuthService {
   NoValidTokens --> UnAuthorized: No authorization code in request
   NoValidTokens --> [*]: TokenRequest(request)
   ActiveSession --> [*]: Authorized(access token, id_token)
+
+   state handle_token_response <<inputPin>> #blue
+
+   handle_token_response -[#blue]-> NoValidTokens: handle_token_response(response)
+   NoValidTokens -[#blue]-> NoValidTokens: Set path from original request
+   NoValidTokens -[#blue]-> [*]: Redirect(headers, SessionData)
 }
+[*] -[#blue]-> handle_token_response
 [*] --> handle_request
 @enduml
