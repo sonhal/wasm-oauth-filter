@@ -117,8 +117,9 @@ struct State {
 
 #[cfg(test)]
 mod tests {
-    use crate::session::{Session, SessionType, SessionCache, NewSession};
+    use crate::session::{Session, SessionType, SessionCache, NewSession, AuthorizationResponseVerifiers, State, AuthorizationTokens};
     use std::collections::HashMap;
+    use std::time::SystemTime;
 
     pub struct TestCache {
         sessions: HashMap<String, SessionType>,
@@ -155,14 +156,34 @@ mod tests {
     fn from_headers() {
         let mut cache = TestCache::new();
         let cookie_name="auth_session".to_string();
-        let cookie = format!("{}=testsession", cookie_name);
+        let cookie_value = "testsession".to_string();
+        let cookie = format!("{}={}", cookie_name, cookie_value);
 
 
         let headers: Vec<(&str, &str)> = vec![("cookie", cookie.as_str())];
-        let session: Session = Session::from_headers(cookie_name.clone(), headers, &cache);
+        let session: Session = Session::from_headers(cookie_name.clone(), headers.clone(), &cache);
         assert!(matches!(session, Session::Empty { id }));
 
-        cache.set(NewSession { id: cookie_name, data: SessionType::AuthorizationRequest() })
+        cache.set(NewSession { id: cookie_value.clone(), data: SessionType::AuthorizationRequest(AuthorizationResponseVerifiers {
+            created_at: SystemTime::now(),
+            state: State { path: "/secure".to_string(), csrf_token: "1234".to_string() },
+            pcke_verifier: Some("1234".to_string())
+        } ) });
+
+        let session: Session = Session::from_headers(cookie_name.clone(), headers.clone(), &cache);
+        assert!(matches!(session, Session::AuthorizationRequest { .. }));
+
+        cache.set(NewSession { id: cookie_value.clone(), data: SessionType::Tokens(AuthorizationTokens {
+            created_at: SystemTime::now(),
+            access_token: "SomeJWT".to_string(),
+            expires_in: None,
+            id_token: None,
+            refresh_token: None
+        }) });
+
+        let session: Session = Session::from_headers(cookie_name.clone(), headers, &cache);
+        assert!(matches!(session, Session::Tokens { .. }));
+
     }
 
 }
