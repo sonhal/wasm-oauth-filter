@@ -4,14 +4,13 @@ use crate::cache::SharedCache;
 
 type Seconds = u32;
 
-
 pub trait SessionCache {
     fn get(&self, id: &String) -> Option<SessionType>;
     fn set(&mut self, session: NewSession);
 }
 
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug)]
 pub enum Session {
     AuthorizationRequest {
         id: String,
@@ -92,7 +91,6 @@ impl Session {
 }
 
 
-
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizationResponseVerifiers {
     created_at: SystemTime,
@@ -140,7 +138,6 @@ mod tests {
                 Some(session_type ) => Some(session_type.to_owned())
             }
         }
-
         fn set(&mut self, session: NewSession) {
             self.sessions.insert(session.id, session.data);
         }
@@ -183,7 +180,6 @@ mod tests {
 
         let session: Session = Session::from_headers(cookie_name.clone(), headers, &cache);
         assert!(matches!(session, Session::Tokens { .. }));
-
     }
 
 }
