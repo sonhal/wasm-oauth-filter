@@ -452,7 +452,7 @@ mod tests {
     fn session_cookie_present_and_valid_token_in_cache_request() {
         let mut oauther= test_oauther();
         let session = Session::Tokens {
-            id: "".to_string(),
+            id: "mysession".to_string(),
             tokens: AuthorizationTokens::new(
                 SystemTime::now(),
                 "testtoken".to_string(),
@@ -460,7 +460,7 @@ mod tests {
                 None,
                 None) };
 
-        let action = oauther.handle_request(session, vec![("cookie", "sessioncookie=mysession")]);
+        let action = oauther.handle_request(session, vec![("cookie", format!("{}=mysession", oauther.config.cookie_name).as_str())]);
         if let Ok(Action::Allow( headers )) = action {
             assert!(headers.contains_key(AUTHORIZATION))
         } else {panic!("action should be to allow")}
@@ -505,11 +505,10 @@ mod tests {
         let mut oauther = test_oauther();
         let session = Session::empty("testsession".to_string());
 
-        let cookie = format!("test session={:?}",session);
         oauther.handle_request(
             session,
             vec![
-                ("cookie", cookie.as_str()),
+                ("cookie", format!("{}=testsession", oauther.config.cookie_name).as_str()),
                 (":path", "auth/?code=awesomecode&state=state123"),
                 (":authority", oauther.config.authorization_url.origin().unicode_serialization().as_str())
             ]);
@@ -523,8 +522,16 @@ mod tests {
             assert!(headers.contains_key(AUTHORIZATION));
         }
 
+        let session = Session::tokens(
+            "testsession".to_string(),
+            "testtoken".to_string(),
+            None,
+            None,
+            None
+        );
+
         let action = oauther.handle_request(
-            ,
+            session,
             vec![("cookie", "sessioncookie=testsession"), (":path", "/"),]);
         if let Ok(Action::Allow( headers )) = action {
             assert!(headers.contains_key(AUTHORIZATION));

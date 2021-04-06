@@ -20,6 +20,7 @@ use crate::cache::{SharedCache};
 use oauth2::http::HeaderMap;
 use std::cell::RefCell;
 use std::rc::Rc;
+use cookie::Expiration::Session;
 
 
 #[cfg(not(test))]
@@ -167,7 +168,9 @@ impl HttpContext for OAuthFilter {
         let headers: Vec<(&str, &str)>
             = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
 
-        match self.oauther.handle_request(, headers) {
+        let session = session::Session::not_set();
+
+        match self.oauther.handle_request(session, headers) {
             Ok(oauther_action) => {
                 match self.oauth_action_handler(oauther_action) {
                     Ok(filter_action) => filter_action,
