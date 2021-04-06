@@ -1,62 +1,64 @@
 use std::time::SystemTime;
 use serde::{Serialize, Deserialize};
 use crate::cache::SharedCache;
+use oauth2::http::{HeaderMap, HeaderValue};
+use oauth2::http::header::{AUTHORIZATION, SET_COOKIE};
+use proxy_wasm::types::BufferType::UpstreamData;
+use cookie::{CookieBuilder, Cookie};
+use crate::util;
 
 type Seconds = u32;
 
 pub trait SessionCache {
-    fn get(&self, id: &String) -> Option<SessionType>;
-    fn set(&mut self, session: NewSession);
+    fn get(&self, id: &String) -> Option<UpdateType>;
+    fn set(&mut self, session: SessionUpdate);
 }
 
 
-#[derive(Debug)]
-pub enum Session {
-    AuthorizationRequest {
-        id: String,
-        verifiers: AuthorizationResponseVerifiers,
-    },
-    Tokens {
-        id: String,
-        tokens: AuthorizationTokens,
-    },
-    Empty {
-        id: String
-    },
-    NotSet,
+#[derive(Debug, Clone)]
+pub struct Session {
+    id: String,
+    pub data: SessionType,
+}
+
+#[derive(Debug, Clone)]
+pub enum SessionType {
+    AuthorizationRequest(AuthorizationResponseVerifiers),
+    Tokens(AuthorizationTokens),
+    Empty
 }
 
 impl Session {
-    pub fn not_set() -> Session {
-        Session::NotSet
-    }
     pub fn empty(id: String) -> Session {
-        Session::Empty { id }
+        Session { id, data: SessionType::Empty }
     }
 
     pub fn tokens(id: String, access_token: String, expires_in: Option<u32>, id_token: Option<String>, refresh_token: Option<String>) -> Session{
-        Session::Tokens { id, tokens: AuthorizationTokens {
-            created_at: SystemTime::now(),
-            access_token,
-            expires_in,
-            id_token,
-            refresh_token
-        } }
+        Session {
+            id,
+            data: SessionType::Tokens(AuthorizationTokens {
+                created_at: SystemTime::now(),
+                access_token,
+                expires_in,
+                id_token,
+                refresh_token
+            }),
+        }
     }
 
-    pub fn from_headers(cookie_name: String, headers: Vec<(&str, &str)>, cache: &dyn SessionCache) -> Session {
+    pub fn from_headers(cookie_name: String, headers: Vec<(&str, &str)>, cache: &dyn SessionCache) -> Option<Session> {
         let session = Session::parse_cookie(&cookie_name, &headers);
         match session {
-            None => Session::not_set(),
+            None => None,
             Some(id) => {
                 match cache.get(&id) {
-                    None => Session::Empty { id },
+                    None => Some(Session::empty(id)),
                     Some(session_type) => {
                         match session_type {
-                            SessionType::AuthorizationRequest( verifiers) =>
-                                Session::from_verifier(id, verifiers),
-                            SessionType::Tokens( tokens) =>
-                                Session::from_tokens(id, tokens),
+                            UpdateType::AuthorizationRequest(verifiers) =>
+                                Some(Session::from_verifier(id, verifiers)),
+                            UpdateType::Tokens(tokens) =>
+                                Some(Session::from_tokens(id, tokens)),
                         }
                     }
                 }
@@ -65,10 +67,10 @@ impl Session {
     }
 
     fn from_verifier(id: String, verifiers: AuthorizationResponseVerifiers) -> Session {
-        Session::AuthorizationRequest {id, verifiers}
+        Session {id, data: SessionType::AuthorizationRequest(verifiers) }
     }
     fn from_tokens(id: String, tokens: AuthorizationTokens) -> Session{
-        Session::Tokens { id, tokens }
+        Session { id, data: SessionType::Tokens(tokens)}
     }
 
     fn parse_cookie(id: &String, headers: &Vec<(&str, &str)>) -> Option<String> {
@@ -89,19 +91,58 @@ impl Session {
             None => None
         }
     }
+
+
+    pub fn token_response(&self, access_token: String, expires_in: Option<Seconds>, id_token: Option<String>, refresh_token: Option<String>) -> SessionUpdate {
+        SessionUpdate { id: self.id.clone(), data: UpdateType::Tokens(AuthorizationTokens {
+            created_at: SystemTime::now(),
+            access_token,
+            expires_in,
+            id_token,
+            refresh_token
+        }) }
+    }
 }
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SessionType {
+pub enum UpdateType {
     AuthorizationRequest(AuthorizationResponseVerifiers),
     Tokens(AuthorizationTokens)
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-pub struct NewSession {
+pub struct SessionUpdate {
     id: String,
-    data: SessionType,
+    data: UpdateType,
+}
+
+impl SessionUpdate {
+    pub fn auth_request(state: String , verifier: String) -> SessionUpdate {
+        SessionUpdate {
+            id: util::new_random_verifier(32).secret().to_owned(),
+            data: UpdateType::AuthorizationRequest(AuthorizationResponseVerifiers {
+                created_at: SystemTime::now(),
+                state: State { path: "".to_string(), csrf_token: state },
+                pcke_verifier: Some(verifier)
+            })
+        }
+    }
+
+    pub fn set_cookie_header(&self, name: &String) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(SET_COOKIE, self.cookie(name).parse().unwrap());
+        headers
+    }
+
+    pub fn cookie(&self, name: &String) -> String {
+        CookieBuilder::new(
+            name,
+            &self.id)
+            .secure(true)
+            .http_only(true)
+            .finish().to_string()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -135,6 +176,14 @@ impl AuthorizationTokens {
             refresh_token,
         }
     }
+
+    pub fn bearer(&self) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        headers.insert(
+            AUTHORIZATION,
+            HeaderValue::from_str(format!("bearer {}",self.access_token).as_str()).unwrap());
+        headers
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -145,12 +194,12 @@ struct State {
 
 #[cfg(test)]
 mod tests {
-    use crate::session::{Session, SessionType, SessionCache, NewSession, AuthorizationResponseVerifiers, State, AuthorizationTokens};
+    use crate::session::{Session, SessionType, UpdateType, SessionCache, SessionUpdate, AuthorizationResponseVerifiers, State, AuthorizationTokens};
     use std::collections::HashMap;
     use std::time::SystemTime;
 
     pub struct TestCache {
-        sessions: HashMap<String, SessionType>,
+        sessions: HashMap<String, UpdateType>,
     }
 
     impl TestCache {
@@ -162,21 +211,21 @@ mod tests {
     }
 
     impl SessionCache for TestCache {
-        fn get(&self, id: &String) -> Option<SessionType> {
+        fn get(&self, id: &String) -> Option<UpdateType> {
             match self.sessions.get(id) {
                 None => None,
                 Some(session_type ) => Some(session_type.to_owned())
             }
         }
-        fn set(&mut self, session: NewSession) {
+        fn set(&mut self, session: SessionUpdate) {
             self.sessions.insert(session.id, session.data);
         }
     }
 
     #[test]
     fn empty() {
-        let session = Session::not_set();
-        assert!(matches!(session, Session::NotSet));
+        let session = Session::empty("test".to_string());
+        assert!(matches!(session.data, SessionType::Empty));
     }
 
     #[test]
@@ -188,19 +237,19 @@ mod tests {
 
 
         let headers: Vec<(&str, &str)> = vec![("cookie", cookie.as_str())];
-        let session: Session = Session::from_headers(cookie_name.clone(), headers.clone(), &cache);
-        assert!(matches!(session, Session::Empty { id }));
+        let session: Session = Session::from_headers(cookie_name.clone(), headers.clone(), &cache).unwrap();
+        assert!(matches!(session.data, SessionType::Empty));
 
-        cache.set(NewSession { id: cookie_value.clone(), data: SessionType::AuthorizationRequest(AuthorizationResponseVerifiers {
+        cache.set(SessionUpdate { id: cookie_value.clone(), data: UpdateType::AuthorizationRequest(AuthorizationResponseVerifiers {
             created_at: SystemTime::now(),
             state: State { path: "/secure".to_string(), csrf_token: "1234".to_string() },
             pcke_verifier: Some("1234".to_string())
         } ) });
 
-        let session: Session = Session::from_headers(cookie_name.clone(), headers.clone(), &cache);
-        assert!(matches!(session, Session::AuthorizationRequest { .. }));
+        let session: Session = Session::from_headers(cookie_name.clone(), headers.clone(), &cache).unwrap();
+        assert!(matches!(session.data, SessionType::AuthorizationRequest { .. }));
 
-        cache.set(NewSession { id: cookie_value.clone(), data: SessionType::Tokens(AuthorizationTokens {
+        cache.set(SessionUpdate { id: cookie_value.clone(), data: UpdateType::Tokens(AuthorizationTokens {
             created_at: SystemTime::now(),
             access_token: "SomeJWT".to_string(),
             expires_in: None,
@@ -208,8 +257,8 @@ mod tests {
             refresh_token: None
         }) });
 
-        let session: Session = Session::from_headers(cookie_name.clone(), headers, &cache);
-        assert!(matches!(session, Session::Tokens { .. }));
+        let session: Session = Session::from_headers(cookie_name.clone(), headers, &cache).unwrap();
+        assert!(matches!(session.data, SessionType::Tokens { .. }));
     }
 
 }

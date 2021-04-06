@@ -119,7 +119,8 @@ impl OAuthFilter {
         let mut cache = self.cache.borrow_mut();
         cache.store(self).unwrap(); // TODO, check if it is best called here
         match action {
-            oauther::Action::Redirect( url, headers) => {
+            oauther::Action::Redirect( url, headers, update) => {
+                // TODO store session update
                 self.respond_with_redirect(url, headers);
                 Ok(Action::Pause)
             }
@@ -168,9 +169,7 @@ impl HttpContext for OAuthFilter {
         let headers: Vec<(&str, &str)>
             = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
 
-        let session = session::Session::not_set();
-
-        match self.oauther.handle_request(session, headers) {
+        match self.oauther.handle_request(None, headers) {
             Ok(oauther_action) => {
                 match self.oauth_action_handler(oauther_action) {
                     Ok(filter_action) => filter_action,
