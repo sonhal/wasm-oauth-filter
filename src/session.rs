@@ -26,21 +26,22 @@ pub enum Session {
     NotSet,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub enum SessionType {
-    AuthorizationRequest(AuthorizationResponseVerifiers),
-    Tokens(AuthorizationTokens)
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct NewSession {
-    id: String,
-    data: SessionType,
-}
-
 impl Session {
-    fn not_set() -> Session {
+    pub fn not_set() -> Session {
         Session::NotSet
+    }
+    pub fn empty(id: String) -> Session {
+        Session::Empty { id }
+    }
+
+    pub fn tokens(id: String, access_token: String, expires_in: Option<u32>, id_token: Option<String>, refresh_token: Option<String>) -> Session{
+        Session::Tokens { id, tokens: AuthorizationTokens {
+            created_at: SystemTime::now(),
+            access_token,
+            expires_in,
+            id_token,
+            refresh_token
+        } }
     }
 
     pub fn from_headers(cookie_name: String, headers: Vec<(&str, &str)>, cache: &dyn SessionCache) -> Session {
@@ -92,6 +93,18 @@ impl Session {
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
+pub enum SessionType {
+    AuthorizationRequest(AuthorizationResponseVerifiers),
+    Tokens(AuthorizationTokens)
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct NewSession {
+    id: String,
+    data: SessionType,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizationResponseVerifiers {
     created_at: SystemTime,
     state: State,
@@ -105,6 +118,23 @@ pub struct AuthorizationTokens {
     expires_in: Option<Seconds>,
     id_token: Option<String>,
     refresh_token: Option<String>
+}
+
+impl AuthorizationTokens {
+    pub fn new(
+        created_at: SystemTime,
+        access_token: String,
+        expires_in: Option<Seconds>,
+        id_token: Option<String>,
+        refresh_token: Option<String>) -> AuthorizationTokens {
+        AuthorizationTokens {
+            created_at,
+            access_token,
+            expires_in,
+            id_token,
+            refresh_token,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]

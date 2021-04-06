@@ -13,6 +13,7 @@ use std::cell::{RefCell, RefMut};
 use std::rc::Rc;
 use std::ops::Deref;
 use std::fmt::Debug;
+use crate::session::Session;
 
 
 pub struct OAuther {
@@ -78,12 +79,12 @@ impl OAuther {
         })
     }
 
-    pub fn handle_request_header(&mut self, headers: Vec<(&str, &str)>) -> Result<Action, String> {
+    pub fn handle_request(&mut self, session: Session, headers: Vec<(&str, &str)>) -> Result<Action, String> {
 
         match self.state.handle_request(self, &headers) {
             Response::NewState(state) => {
                 self.state = state;
-                self.handle_request_header(headers)
+                self.handle_request(session, headers)
             }
             Response::NewAction(action) => match action {
                 OAutherAction::Redirect(url, headers, update) => {
@@ -349,6 +350,9 @@ mod tests {
     use crate::TokenResponse;
     use oauth2::basic::{BasicTokenResponse, BasicTokenType};
     use crate::cache::LocalCache;
+    use crate::session::AuthorizationTokens;
+    use std::alloc::System;
+    use std::time::SystemTime;
 
 
     fn test_config() -> FilterConfig {
@@ -417,8 +421,9 @@ mod tests {
     #[test]
     fn unauthorized_request() {
         let mut oauther = test_oauther();
+        let session = Session::not_set();
 
-        let action = oauther.handle_request_header(vec![("random_header", "value")]);
+        let action = oauther.handle_request(session, vec![("random_header", "value")]);
 
         if let Ok(Action::Redirect(url, headers)) = action {
             assert_eq!(url.origin().unicode_serialization().as_str(), "http://authorization");
@@ -434,7 +439,10 @@ mod tests {
     #[test]
     fn session_cookie_present_but_no_token_in_cache_request() {
         let mut oauther= test_oauther();
-        let action = oauther.handle_request_header(vec![("cookie", "sessioncookie=value")]);
+
+        let session= Session::empty("sessionid".to_string());
+
+        let action = oauther.handle_request(session, vec![("cookie", "sessioncookie=sessionid")]);
         if let Ok(Action::Redirect(url, headers)) = action {
             assert_eq!(url.origin().unicode_serialization().as_str(), "http://authorization");
         } else {panic!("actions was not redirect")}
@@ -443,19 +451,16 @@ mod tests {
     #[test]
     fn session_cookie_present_and_valid_token_in_cache_request() {
         let mut oauther= test_oauther();
+        let session = Session::Tokens {
+            id: "".to_string(),
+            tokens: AuthorizationTokens::new(
+                SystemTime::now(),
+                "testtoken".to_string(),
+                None,
+                None,
+                None) };
 
-        {
-            let mut cache: RefMut<dyn Cache> = oauther.cache.deref().deref().borrow_mut();
-            cache
-                .set_tokens_for_session(
-                    &"mysession".to_string(),
-                    &"cooltoken".to_string(),
-                    None
-                );
-        }
-
-
-        let action = oauther.handle_request_header(vec![("cookie", "sessioncookie=mysession")]);
+        let action = oauther.handle_request(session, vec![("cookie", "sessioncookie=mysession")]);
         if let Ok(Action::Allow( headers )) = action {
             assert!(headers.contains_key(AUTHORIZATION))
         } else {panic!("action should be to allow")}
@@ -464,8 +469,10 @@ mod tests {
     #[test]
     fn session_cookie_present_no_valid_token_in_cache_but_auth_code_in_query() {
         let mut oauther= test_oauther();
+        let session = Session::empty("mysession".to_string());
 
-        let action = oauther.handle_request_header(
+        let action = oauther.handle_request(
+            session,
             vec![
                 ("cookie", "sessioncookie=mysession"),
                 (":path", "auth/?code=awesomecode&state=state123"),
@@ -496,25 +503,28 @@ mod tests {
     #[test]
     fn valid_session() {
         let mut oauther = test_oauther();
-        let test_session = "testsession".to_string();
+        let session = Session::empty("testsession".to_string());
 
-        let cookie = format!("{}={}", oauther.config.cookie_name, test_session);
-        oauther.handle_request_header(vec![
-            ("cookie", cookie.as_str()),
-            (":path", "auth/?code=awesomecode&state=state123"),
-            (":authority", oauther.config.authorization_url.origin().unicode_serialization().as_str())
-        ]);
+        let cookie = format!("test session={:?}",session);
+        oauther.handle_request(
+            session,
+            vec![
+                ("cookie", cookie.as_str()),
+                (":path", "auth/?code=awesomecode&state=state123"),
+                (":authority", oauther.config.authorization_url.origin().unicode_serialization().as_str())
+            ]);
 
         let token_call_response = StandardTokenResponse::new(
             AccessToken::new("myaccesstoken".to_string()),
             BasicTokenType::Bearer,
             EmptyExtraTokenFields { });
-        let action = oauther.handle_token_call_response(&test_session, &token_call_response);
+        let action = oauther.handle_token_call_response(&"".to_string(), &token_call_response);
         if let Ok(Action::Allow( headers )) = action {
             assert!(headers.contains_key(AUTHORIZATION));
         }
 
-        let action = oauther.handle_request_header(
+        let action = oauther.handle_request(
+            ,
             vec![("cookie", "sessioncookie=testsession"), (":path", "/"),]);
         if let Ok(Action::Allow( headers )) = action {
             assert!(headers.contains_key(AUTHORIZATION));

@@ -167,7 +167,7 @@ impl HttpContext for OAuthFilter {
         let headers: Vec<(&str, &str)>
             = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
 
-        match self.oauther.handle_request_header(headers) {
+        match self.oauther.handle_request(, headers) {
             Ok(oauther_action) => {
                 match self.oauth_action_handler(oauther_action) {
                     Ok(filter_action) => filter_action,
