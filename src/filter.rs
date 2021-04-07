@@ -120,7 +120,6 @@ impl OAuthFilter {
         let mut cache = self.cache.borrow_mut();
         match action {
             oauth_service::Action::Redirect(url, headers, update) => {
-                // TODO store session update
                 cache.set(update);
                 cache.store(self).unwrap();
                 self.respond_with_redirect(url, headers);

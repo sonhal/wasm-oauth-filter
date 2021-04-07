@@ -434,7 +434,14 @@ mod tests {
     fn unauthorized_request() {
         let mut oauth = test_oauther();
 
-        let action = oauth.handle_request(None, vec![("random_header", "value")]);
+        let action = oauth.handle_request(
+            None,
+            vec![
+                ("random_header", "value"),
+                ("x-forwarded-proto", "http"),
+                (":authority", "localhost")
+            ]
+        );
 
         if let Ok(Action::Redirect(url, headers, update)) = action {
             assert_eq!(url.origin().unicode_serialization().as_str(), "http://authorization");
@@ -448,7 +455,9 @@ mod tests {
 
         let session= Session::empty("sessionid".to_string());
 
-        let action = oauth.handle_request(Some(session), vec![("cookie", "sessioncookie=sessionid")]);
+        let action = oauth.handle_request(
+            Some(session),
+            vec![("cookie", "sessioncookie=sessionid"), ("x-forwarded-proto", "http"), (":authority", "localhost")]);
         if let Ok(Action::Redirect(url, headers, update )) = action {
             assert_eq!(url.origin().unicode_serialization().as_str(), "http://authorization");
         } else {panic!("actions was not redirect")}
@@ -466,7 +475,13 @@ mod tests {
             None,
         );
 
-        let action = oauth.handle_request(Some(session), vec![("cookie", format!("{}=mysession", oauth.config.cookie_name).as_str())]);
+        let action = oauth.handle_request(
+            Some(session),
+            vec![
+                ("cookie", format!("{}=mysession", oauth.config.cookie_name).as_str()),
+                 ("x-forwarded-proto", "http")
+            ]
+        );
         if let Ok(Action::Allow( headers )) = action {
             assert!(headers.contains_key(AUTHORIZATION))
         } else {panic!("action should be to allow")}
@@ -475,14 +490,20 @@ mod tests {
     #[test]
     fn session_cookie_present_no_valid_token_in_cache_but_auth_code_in_query() {
         let mut oauth= test_oauther();
-        let session = Session::empty("mysession".to_string());
+        let session = Session::verifiers(
+            "mysession".to_string(),
+            SystemTime::now(),
+            "http://localhost".to_string(),
+            "123".to_string(),
+            Some("abc".to_string()));
 
         let action = oauth.handle_request(
             Some(session),
             vec![
                 ("cookie", "sessioncookie=mysession"),
                 (":path", "auth/?code=awesomecode&state=state123"),
-                (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str())
+                (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str()),
+                ("x-forwarded-proto", "http")
             ]);
         if let Ok(Action::HttpCall( http_request )) = action {
             assert_eq!(http_request.url.as_str(), oauth.config.token_url.as_str())
@@ -507,7 +528,8 @@ mod tests {
             vec![
                 ("cookie", format!("{}={}", oauth.config.cookie_name, session_id).as_str()),
                 (":path", "auth/?code=awesomecode&state=state123"),
-                (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str())
+                (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str()),
+                ("x-forwarded-proto", "http")
             ]);
 
         assert!(matches!(action, Ok(Action::HttpCall(http_request))));
