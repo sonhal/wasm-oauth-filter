@@ -13,7 +13,7 @@ use std::time::Duration;
 use serde::{Serialize, Deserialize};
 use url;
 use oauth2::basic::{BasicTokenType};
-use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
+use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields, TokenResponse};
 use oauth2::url::ParseError;
 use url::Url;
 use crate::oauth_service::{OAuthService};
@@ -24,6 +24,7 @@ use std::rc::Rc;
 use cookie::Expiration::Session;
 use crate::session::{SessionCache};
 use std::ops::Deref;
+use crate::messages::{ErrorResponse, ErrorBody};
 
 
 #[cfg(not(test))]
@@ -81,7 +82,7 @@ impl OAuthFilter {
         })
     }
 
-    fn send_error(&self, code: u32, response: ErrorResponse) {
+    fn send_error(&self, code: u32, response: crate::messages::ErrorBody) {
         let body = serde_json::to_string_pretty(&response).unwrap();
         log_err(body.as_str());
         self.send_http_response(
@@ -93,11 +94,12 @@ impl OAuthFilter {
 
     fn send_bad_request(&self, message: String) {
         log_err(message.as_str());
-        self.send_error(400, ErrorResponse {
-            status: "400".to_string(),
-            error: message,
-            error_description: None
-        });
+        self.send_error(400,
+                        crate::messages::ErrorBody::new(
+                            "400".to_string(),
+                            message,
+                            None)
+        );
     }
 
     fn fail(&mut self) {
@@ -198,33 +200,6 @@ impl HttpContext for OAuthFilter {
     }
 }
 
-#[derive(Deserialize)]
-struct TokenResponse {
-    #[serde(default)]
-    error: String,
-    #[serde(default)]
-    error_description: String,
-    #[serde(default)]
-    id_token: String,
-    #[serde(default)]
-    access_token: String,
-    #[serde(default)]
-    token_type: String,
-    #[serde(default)]
-    scope: String,
-    #[serde(default)]
-    expires_in: i64
-}
-
-#[derive(Serialize)]
-struct ErrorResponse {
-    status: String,
-    error: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    error_description: Option<String>
-}
-
-
 impl Context for OAuthFilter {
 
     fn on_http_call_response(
@@ -236,51 +211,43 @@ impl Context for OAuthFilter {
     ) {
         log_debug("Token response from auth server received");
         if let Some(body) = self.get_http_call_response_body(0, body_size) {
-            match serde_json::from_slice::<TokenResponse>(body.as_slice()) {
-                Ok(data) => {
-                    if data.error != "" {
-                        self.send_error(
-                            500,
-                            create_error_with_description(
-                                data.error.to_owned(),
-                                data.error_description.to_owned()
-                            )
-                        );
-                        return
-                    }
+            match serde_json::from_slice::<crate::messages::TokenResponse>(body.as_slice()) {
+                Ok(response) => {
+                    match response {
+                        crate::messages::TokenResponse::Error(response) =>
+                            self.send_error(500, response.to_error_body()),
+                        crate::messages::TokenResponse::Success(response) => {
+                            log::debug!("access token found");
+                            let request = StandardTokenResponse::new(
+                                AccessToken::new(response.access_token),
+                                BasicTokenType::Bearer,
+                                EmptyExtraTokenFields {}
+                            );
 
-                    if data.access_token != "" {
-                        log::debug!("access token found");
-                        let request = StandardTokenResponse::new(
-                            AccessToken::new(data.access_token),
-                            BasicTokenType::Bearer,
-                            EmptyExtraTokenFields {}
-                        );
-
-                        // TODO clean this up
-                        let headers = self.get_http_request_headers();
-                        let headers: Vec<(&str, &str)>
-                            = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
+                            // TODO clean this up
+                            let headers = self.get_http_request_headers();
+                            let headers: Vec<(&str, &str)>
+                                = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
 
 
-                        let user_session = self.session(&headers);
-                        let action = self.oauther.handle_token_call_response(user_session, &request);
-                        match action {
-                            Ok(action) => {
-                                // TODO maybe bad to just ignore return here?
-                                match self.oauth_action_handler(action) {
-                                    Ok(action) => {} // TODO maybe seperate handling for token responses?
-                                    Err( status) => self.send_error(
-                                        500,
-                                        create_error(format!("ERROR when handling action, status{:?}", status)))
-                                }
-                            },
-                            Err(error) => self.send_error(
-                                500,
-                                create_error(format!("Invalid token response:  {:?}", error))
-                            )
+                            let user_session = self.session(&headers);
+                            let action = self.oauther.handle_token_call_response(user_session, &request);
+                            match action {
+                                Ok(action) => {
+                                    // TODO maybe bad to just ignore return here?
+                                    match self.oauth_action_handler(action) {
+                                        Ok(action) => {} // TODO maybe seperate handling for token responses?
+                                        Err( status) => self.send_error(
+                                            500,
+                                            create_error(format!("ERROR when handling action, status{:?}", status)))
+                                    }
+                                },
+                                Err(error) => self.send_error(
+                                    500,
+                                    create_error(format!("Invalid token response:  {:?}", error))
+                                )
+                            }
                         }
-
                     }
                 },
                 Err(e) => {
@@ -299,20 +266,9 @@ impl Context for OAuthFilter {
     }
 }
 
-fn create_error_with_description(error: String, error_description: String) -> ErrorResponse {
-    ErrorResponse{
-        status: "error".to_owned(),
-        error,
-        error_description: Some(error_description)
-    }
-}
 
-fn create_error(error: String) -> ErrorResponse {
-    ErrorResponse{
-        status: "error".to_owned(),
-        error,
-        error_description: None
-    }
+fn create_error(error: String) -> ErrorBody {
+    ErrorBody::new("error".to_owned(), error, None)
 }
 
 impl Context for OAuthRootContext {}

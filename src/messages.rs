@@ -3,13 +3,13 @@ use serde::{Serialize, Deserialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
-enum TokenResponse {
+pub enum TokenResponse {
     Error(ErrorResponse),
     Success(SuccessfulResponse),
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-struct ErrorResponse {
+pub struct ErrorResponse {
     error: String,
     error_description: String,
     error_uri: Option<String>
@@ -26,17 +26,17 @@ impl ErrorResponse {
 }
 
 #[derive(Debug, Serialize, Deserialize)]
-struct SuccessfulResponse {
-    access_token: String,
-    id_token: Option<String>,
-    token_type: Option<String>,
-    scope: String,
-    expires_in: Option<i64>
+pub struct SuccessfulResponse {
+    pub access_token: String,
+    pub id_token: Option<String>,
+    pub token_type: Option<String>,
+    pub scope: Option<String>,
+    pub expires_in: Option<u64>
 }
 
 
 #[derive(Serialize)]
-struct ErrorBody {
+pub struct ErrorBody {
     status: String,
     error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -76,7 +76,7 @@ mod tests {
             access_token: "cooltoken".to_string(),
             id_token: None,
             token_type: None,
-            scope: "openid email profile".to_string(),
+            scope: Some("openid email profile".to_string()),
             expires_in: None
         });
         let serialized = serde_json::to_string(&test_success).unwrap();
@@ -84,6 +84,19 @@ mod tests {
         assert!(matches!(deserialized, TokenResponse::Success(..)));
 
         let serialized = "{\"access_token\":\"cooltoken\",\"scope\":\"openid email profile\"}";
+        let deserialized: TokenResponse = serde_json::from_str(&serialized).unwrap();
+        assert!(matches!(deserialized, TokenResponse::Success(..)));
+    }
+
+    #[test]
+    fn real_case() {
+        let serialized =  "{
+            \"token_type\" : \"Bearer\",
+            \"id_token\" : \"eyJraWQiOiJtb2NrLW9hdXRoMi1zZXJ2ZXIta2V5IiwidHlwIjoiSldUIiwiYWxnIjoiUlMyNTYifQ.eyJzdWIiOiJ0ZXN0ZXIxIiwiYXVkIjoiYXVkLXRva2VuLXRlc3RlciIsImFjciI6IjEiLCJuYmYiOjE2MTc4Mjg5NjgsImlzcyI6Imh0dHA6XC9cL21vY2stb2F1dGgyLXNlcnZlcjo4MDgwXC9jdXN0b21pc3MiLCJleHAiOjE2MTc4MjkwODgsImlhdCI6MTYxNzgyODk2OCwianRpIjoiODFlOTM3ZjYtMzAxYi00ZWVhLTg2MWQtOTA5YmEzOGJhYzVkIn0.ZwHNg8IOlwOlqzDpSf9G6hcOk_AdIr8vAGy2ciWvGr6-xfYE5ABwiV_4kD6o3dsb_3Ii5DeOD0pcCRFawURWd5vYaaLCGjPVO0R0MtiTGil2LKUOkrAgVxbfFA4o09FxTc7xYe5GcDk371bCpCWfXqciT5OL6-Rl0k8tfRCVaI5Pgh_NhKeRa_v16nbakDpYS2boKkFi8z7EmgckhlKPKbye2-G6-xkUf4zd37ELAlnkFeJB0CU_szkFlGzTVu5o2nj0ew6Yqle4N1LVBlDWuNSX1LxbtpaEzfpXQl2UA2Voojc2jfUyLqwJDaQdg7NrnmyOtapR24hFR_A2Ci4_Jw\",
+            \"access_token\" : \"eyJraWQiOiJtb2NrLW9hdXRoMi1zZXJ2ZXIta2V5IiwidHlwIjoiSldUIiwiYWxnIjoiUlMyNTYifQ.eyJzdWIiOiJ0ZXN0ZXIxIiwiYXVkIjoiYXVkLXRva2VuLXRlc3RlciIsImFjciI6IjEiLCJuYmYiOjE2MTc4Mjg5NjgsImlzcyI6Imh0dHA6XC9cL21vY2stb2F1dGgyLXNlcnZlcjo4MDgwXC9jdXN0b21pc3MiLCJleHAiOjE2MTc4MjkwODgsImlhdCI6MTYxNzgyODk2OCwianRpIjoiMmNiY2Y1NGMtZjYzNi00YzIxLWI3OTUtN2QwNDVmMTkwNGM2In0.Ifet2fTc4a3sPnrRO7y04WkONwhmy7DbCd6_rMKnwnI7oeEdrAfViNbXxh6geI-tefQKwaF4gjm3XdL_S0kB0Cy3cBhMSxYz33qkRx-2FJgUZ497t6lMEvqtcRcaeI3jaQaOFtlX1Xckim6w-cC-qDBDwDRjugd5zNIabn6Ha5gsH9jt837Naf95KmSDxrFOUSFl-967E14i5pFIjnJf8rEKdVp3uCG0mu9LBPZb1ayLuOnYedcxWXH1AqEze0q3TzUjMyPWQZ9DUNkvGFLBIyd9ScWiDn-o8BgGSvfKseuSCj3jhyBZHmZT7EP97s6NpQuBs-hsnCLK5hnkMRc_7Q\",
+            \"refresh_token\" : \"2087ea81-6397-482e-80f2-8c11b13a72f5\",
+            \"expires_in\" : 119
+            }";
         let deserialized: TokenResponse = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, TokenResponse::Success(..)));
     }
