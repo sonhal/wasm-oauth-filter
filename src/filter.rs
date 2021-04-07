@@ -239,12 +239,12 @@ impl Context for OAuthFilter {
                                         Ok(action) => {} // TODO maybe seperate handling for token responses?
                                         Err( status) => self.send_error(
                                             500,
-                                            create_error(format!("ERROR when handling action, status{:?}", status)))
+                                            ErrorBody::new("500".to_string(), format!("ERROR when handling action, status{:?}", status), None))
                                     }
                                 },
                                 Err(error) => self.send_error(
                                     500,
-                                    create_error(format!("Invalid token response:  {:?}", error))
+                                    ErrorBody::new("500".to_string(), format!("Invalid token response:  {:?}", error), None)
                                 )
                             }
                         }
@@ -253,22 +253,17 @@ impl Context for OAuthFilter {
                 Err(e) => {
                     self.send_error(
                         500,
-                        create_error(format!("Invalid token response:  {:?}", e))
+                        ErrorBody::new("500".to_string(), format!("Invalid token response:  {:?}", e), None)
                     );
                 }
             };
         } else {
             self.send_error(
                 500,
-                create_error(format!("Received invalid payload from authorization server"))
+                ErrorBody::new("500".to_string(),format!("Received invalid payload from authorization server"), None)
             );
         }
     }
-}
-
-
-fn create_error(error: String) -> ErrorBody {
-    ErrorBody::new("error".to_owned(), error, None)
 }
 
 impl Context for OAuthRootContext {}
