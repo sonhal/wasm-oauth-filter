@@ -17,10 +17,9 @@ use crate::session::{Session, SessionUpdate, SessionType};
 
 
 pub struct OAuthService {
-    config: OAutherConfig,
+    config: ServiceConfig,
     state: Box<dyn State>,
     client: BasicClient,
-    cache: Box<Rc<RefCell<dyn Cache>>>,
 }
 
 #[derive(Debug)]
@@ -36,32 +35,29 @@ pub struct SessionData {
     pub(crate) id_token: Option<String>,
 }
 
-pub trait Cache {
-    fn get_tokens_for_session(&self, session: &String) -> Option<&SessionData>;
-    fn set_tokens_for_session(&mut self, session: &String, access_token: &String, id_token: Option<&String>);
-
-    fn get_verifier_for_state(&self, state: &String) -> Option<&String>;
-    fn set_verifier_for_state(&mut self, state: &String, verifier: &String);
-}
-
 trait State: Debug {
     fn handle_request(&self, session: &Option<Session>, oauth: &OAuthService, header: &Vec<(&str, &str)>) -> Response;
     fn handle_token_call_response(
         &self, oauth: &OAuthService,
+        session: &Option<Session>,
         token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>
     ) -> Response;
 
-    fn debug_entering(&self, headers: &Vec<(&str, &str)>) {
-        crate::log_debug(format!("Entering {:?} state with headers={:?}", self, headers).as_str());
+    fn debug_entering(&self, session: &Option<Session>, headers: &Vec<(&str, &str)>) {
+        crate::log_debug(
+            format!(
+                "Entering {:?} state with session={:?}, headers={:?}",
+                self,
+                session,
+                headers).as_str());
     }
 }
 
 impl OAuthService {
     pub fn new(
         config: FilterConfig,
-        cache: Box<Rc<RefCell<dyn Cache>>>,
     ) -> Result<OAuthService, ParseError> {
-        let auther_config = OAutherConfig::from(config);
+        let auther_config = ServiceConfig::from(config);
 
         let client = BasicClient::new(
                 auther_config.client_id.clone(),
@@ -75,7 +71,6 @@ impl OAuthService {
             config: auther_config,
             state: Box::new(Start { }),
             client,
-            cache,
         })
     }
 
@@ -99,8 +94,8 @@ impl OAuthService {
         }
     }
 
-    pub fn handle_token_call_response(&mut self, _: &String, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Result<Action, String> {
-        match self.state.handle_token_call_response(self, token_response) {
+    pub fn handle_token_call_response(&mut self, session: Option<Session>, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Result<Action, String> {
+        match self.state.handle_token_call_response(self, &session, token_response) {
             NewState(state) => Err(format!("ERROR, invalid state returned NewState={:?}", state)),
             NewAction( action) => {
                 match action {
@@ -133,15 +128,6 @@ impl OAuthService {
         }
     }
 
-    fn create_session_cookie(&self, csrf: String) -> Cookie {
-        CookieBuilder::new(
-            self.config.cookie_name.as_str().to_owned(),
-            util::new_random_verifier(32).secret().to_owned())
-            .secure(true)
-            .http_only(true)
-            .finish()
-    }
-
     fn authorization_server_redirect(&self) -> (Url, String, String) {
         // TODO cache verifier for use in the token call
 
@@ -150,7 +136,7 @@ impl OAuthService {
             PkceCodeChallenge::from_code_verifier_sha256(&verifier);
 
         let (auth_url, csrf_token) = self.client
-            .authorize_url(|| CsrfToken::new("state123".to_string()))
+            .authorize_url(|| CsrfToken::new(util::new_random_verifier(32).secret().to_string()))
             // Set the desired scopes.
             .add_scope(Scope::new("openid".to_string()))
             // Set the PKCE code challenge.
@@ -172,7 +158,7 @@ impl OAuthService {
     }
 
     fn request_auth_code(&self, headers: &Vec<(&str, &str)>) -> Option<String> {
-        // TODO this could ben done easier, without needing authority, without lib support
+        // TODO this could ben done easier, without needing authority, without lib support and fake scheme
         let authority =
             headers.iter().find( |(name, _ )| { *name == ":authority"}).map( | entry|{ entry.1 });
         let path =
@@ -202,12 +188,30 @@ impl OAuthService {
             &TokenUrl::from_url(self.config.token_url.clone()),
             vec![("grant_type", "authorization_code"), ("code", code.as_str())])
     }
+
+    fn request_url(&self, headers: &Vec<(&str, &str)>) -> Result<String, String> {
+        let scheme =
+            headers.iter().find( |(name, _ )| { *name == "x-forwarded-proto"}).map( | entry|{ entry.1 });
+        let authority =
+            headers.iter().find( |(name, _ )| { *name == ":authority"}).map( | entry|{ entry.1 });
+        let path =
+            headers.iter().find( |(name, _ )| { *name == ":path"}).map( | entry|{ entry.1 });
+        match (scheme, authority) {
+            (None, _) => Err("No scheme in request header".to_string()),
+            (_, None) => Err("No authority in request header".to_string()),
+            (Some(scheme), Some(authority)) => {
+                let mut url = format!("{}://{}",scheme, authority);
+                url.push_str(path.unwrap_or(""));
+                Ok(url)
+            }
+        }
+    }
 }
 
 impl State for Start  {
 
     fn handle_request(&self, session: &Option<Session>, _: &OAuthService, header: &Vec<(&str, &str)>) -> Response {
-        self.debug_entering(header);
+        self.debug_entering(&session, header);
         // check cookie
         match session {
             Some( session ) => NewState(Box::new(SessionCookiePresent { session: session.clone() })),
@@ -217,33 +221,37 @@ impl State for Start  {
         }
     }
 
-    fn handle_token_call_response(&self, oauth: &OAuthService, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
+    fn handle_token_call_response(&self, _: &OAuthService, _: &Option<Session>, _: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
         unreachable!()
     }
 }
 
 impl State for NoValidSession {
     fn handle_request(&self, session: &Option<Session>, oauth: &OAuthService, header: &Vec<(&str, &str)>) -> Response {
-        self.debug_entering(header);
+        self.debug_entering(&session, header);
+
 
         let (url, state, verifier) = oauth.authorization_server_redirect();
-        let new_session = SessionUpdate::auth_request(state, verifier);
+        let request_url = oauth.request_url(header)
+            .expect("ERROR: No authority in request header");
+        let new_session = SessionUpdate::auth_request(request_url, state, verifier);
         let headers = new_session.set_cookie_header(&oauth.config.cookie_name);
         NewAction(ServiceAction::Redirect(url, headers, new_session))
     }
 
-    fn handle_token_call_response(&self, oauth: &OAuthService, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
+    fn handle_token_call_response(&self, _: &OAuthService, _: &Option<Session>, _: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
         unreachable!()
     }
 }
 
 impl State for SessionCookiePresent {
     fn handle_request(&self, session: &Option<Session>, oauth: &OAuthService, header: &Vec<(&str, &str)>) -> Response {
-        self.debug_entering(header);
+        self.debug_entering(&session, header);
 
         if let Some(session) = session {
             match &session.data {
-                SessionType::Empty => {
+                SessionType::Empty => Response::NewState( Box::new(NoValidSession {})),
+                SessionType::AuthorizationRequest(..) => {
                     let code = oauth.request_auth_code(header);
                     match code {
                         None => Response::NewState( Box::new(NoValidSession {})),
@@ -253,9 +261,7 @@ impl State for SessionCookiePresent {
                             Response::NewAction(ServiceAction::HttpCall(request))
                         }
                     }
-
-                }
-                SessionType::AuthorizationRequest(..) => Response::NewState( Box::new(NoValidSession {})),
+                },
                 SessionType::Tokens(tokens) => {
                     // TODO maybe validate expiry? But it is probably RS responsibility
                     // TODO fix hack where we just take the first token in the list
@@ -268,14 +274,32 @@ impl State for SessionCookiePresent {
         }
     }
 
-    fn handle_token_call_response(&self, oauth: &OAuthService, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
+    fn handle_token_call_response(&self, _: &OAuthService, _: &Option<Session>, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
         let access_token = token_response.access_token().secret().clone();
-        let session = self.session.clone();
-        Response::NewAction(ServiceAction::Redirect(
-            "http://localhost:8090/".parse().unwrap(),
-            HeaderMap::new(),
-            session.token_response(access_token, None, None, None),
-        ))
+        let expires_in = token_response.expires_in();
+        let refresh_token: Option<String> = token_response.refresh_token()
+            .and_then(
+                |token|
+                    { Some(token.secret().clone())}
+            );
+
+        match &self.session.data {
+            SessionType::AuthorizationRequest(verifiers) => {
+                Response::NewAction(ServiceAction::Redirect(
+                    verifiers.request_url().parse().unwrap(),
+                    HeaderMap::new(),
+                    self.session.token_response(access_token, expires_in, None, refresh_token),
+                ))
+            }
+            SessionType::Tokens(_) => {
+                unreachable!()
+            }
+            SessionType::Empty => {
+                unreachable!()
+            }
+        }
+
+
     }
 }
 
@@ -300,7 +324,7 @@ struct SessionCookiePresent {
     session: Session,
 }
 
-struct OAutherConfig {
+struct ServiceConfig {
     cookie_name: String,
     redirect_url: url::Url,
     authorization_url: url::Url,
@@ -309,9 +333,9 @@ struct OAutherConfig {
     client_secret: ClientSecret
 }
 
-impl OAutherConfig {
-    fn from(config: FilterConfig) -> OAutherConfig {
-        OAutherConfig {
+impl ServiceConfig {
+    fn from(config: FilterConfig) -> ServiceConfig {
+        ServiceConfig {
             cookie_name: config.cookie_name,
             redirect_url: url::Url::parse(config.redirect_uri.as_str())
                 .expect("Error parsing FilterConfig redirect_uri when creating OAutherConfig"),
@@ -326,11 +350,11 @@ impl OAutherConfig {
 }
 
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::any::Any;
+    use std::matches;
     use crate::oauth_service::ServiceAction::Redirect;
     use std::borrow::Borrow;
     use std::collections::HashMap;
@@ -339,7 +363,7 @@ mod tests {
     use crate::TokenResponse;
     use oauth2::basic::{BasicTokenResponse, BasicTokenType};
     use crate::cache::LocalCache;
-    use crate::session::AuthorizationTokens;
+    use crate::session::{AuthorizationTokens, AuthorizationResponseVerifiers};
     use std::alloc::System;
     use std::time::SystemTime;
 
@@ -374,7 +398,6 @@ mod tests {
     fn test_oauther() -> OAuthService {
         OAuthService::new(
             test_config(),
-            Box::new(Rc::new(RefCell::new(LocalCache::new()))),
         ).unwrap()
     }
 
@@ -468,42 +491,42 @@ mod tests {
 
     #[test]
     fn handle_valid_token_call_response() {
-        // let mut oauth= test_oauther();
-        // let test_session = "testsession".to_string();
-        // let token_call_response = StandardTokenResponse::new(
-        //     AccessToken::new("myaccesstoken".to_string()),
-        // BasicTokenType::Bearer,
-        // EmptyExtraTokenFields { });
-        //
-        // let action = oauth.handle_token_call_response(&test_session, &token_call_response);
-        // if let Ok(Action::Allow( headers )) = action {
-        //     assert!(headers.contains_key(AUTHORIZATION));
-        //     assert_eq!(headers.get(AUTHORIZATION).unwrap().to_str().unwrap(), "bearer myaccesstoken");
-        // } else {panic!("action should be to HttpCall")}
+        let mut oauth= test_oauther();
+        let session_id = "testsession";
+        let protected_api = "http://proxy:8081/resource";
+        let session = Session::verifiers(
+            session_id.to_string(),
+            SystemTime::now(),
+            protected_api.to_string(),
+            "state123".to_string(),
+            Some("abc".to_string())
+        );
+
+        let action = oauth.handle_request(
+            Some(session.clone()),
+            vec![
+                ("cookie", format!("{}={}", oauth.config.cookie_name, session_id).as_str()),
+                (":path", "auth/?code=awesomecode&state=state123"),
+                (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str())
+            ]);
+
+        assert!(matches!(action, Ok(Action::HttpCall(http_request))));
+
+        let token_call_response = StandardTokenResponse::new(
+            AccessToken::new("myaccesstoken".to_string()),
+        BasicTokenType::Bearer,
+        EmptyExtraTokenFields { });
+
+        let action = oauth.handle_token_call_response(Some(session), &token_call_response);
+        if let Ok(Action::Redirect( url, headers, update)) = action {
+            assert_eq!(url.to_string(), protected_api);
+        } else {panic!("action should be to HttpCall")}
     }
 
 
     #[test]
     fn valid_session() {
         let mut oauth = test_oauther();
-        let session = Session::empty("testsession".to_string());
-
-        oauth.handle_request(
-            Some(session),
-            vec![
-                ("cookie", format!("{}=testsession", oauth.config.cookie_name).as_str()),
-                (":path", "auth/?code=awesomecode&state=state123"),
-                (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str())
-            ]);
-
-        let token_call_response = StandardTokenResponse::new(
-            AccessToken::new("myaccesstoken".to_string()),
-            BasicTokenType::Bearer,
-            EmptyExtraTokenFields { });
-        let action = oauth.handle_token_call_response(&"".to_string(), &token_call_response);
-        if let Ok(Action::Allow( headers )) = action {
-            assert!(headers.contains_key(AUTHORIZATION));
-        }
 
         let session = Session::tokens(
             "testsession".to_string(),

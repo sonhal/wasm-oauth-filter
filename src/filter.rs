@@ -15,13 +15,14 @@ use oauth2::basic::{BasicTokenType};
 use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
 use oauth2::url::ParseError;
 use url::Url;
-use crate::oauth_service::{OAuthService, Cache};
+use crate::oauth_service::{OAuthService};
 use crate::cache::{SharedCache};
 use oauth2::http::HeaderMap;
 use std::cell::RefCell;
 use std::rc::Rc;
 use cookie::Expiration::Session;
-use crate::session::SessionCache;
+use crate::session::{SessionCache};
+use std::ops::Deref;
 
 
 #[cfg(not(test))]
@@ -43,7 +44,7 @@ struct OAuthRootContext {
 struct OAuthFilter {
     config: FilterConfig,
     oauther: OAuthService,
-    cache: Rc<RefCell<SharedCache>>,
+    cache: RefCell<SharedCache>,
 }
 
 
@@ -69,10 +70,9 @@ impl OAuthFilter {
     fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
         log_debug("Creating new HttpContext");
         log_info(format!("Cache state={:?}", cache).as_str());
+        let cache = RefCell::new(cache);
 
-
-        let cache = Rc::new(RefCell::new(cache));
-        let oauther = OAuthService::new(config.clone(), Box::new(cache.clone()))?;
+        let oauther = OAuthService::new(config.clone())?;
         Ok(OAuthFilter {
             config,
             oauther,
@@ -118,12 +118,11 @@ impl OAuthFilter {
 
     fn oauth_action_handler(&self, action: oauth_service::Action) -> Result<Action, Status> {
         let mut cache = self.cache.borrow_mut();
-
         match action {
             oauth_service::Action::Redirect(url, headers, update) => {
                 // TODO store session update
                 cache.set(update);
-                cache.store(self).unwrap(); // TODO, check if it is best called here
+                cache.store(self).unwrap();
                 self.respond_with_redirect(url, headers);
                 Ok(Action::Pause)
             }
@@ -160,6 +159,14 @@ impl OAuthFilter {
             }
         }
     }
+
+    fn session(&self, headers: &Vec<(&str, &str)>) -> Option<crate::session::Session> {
+        crate::session::Session::from_headers(
+            self.config.cookie_name.clone(),
+            headers.clone(),
+            self.cache.borrow().deref()
+        )
+    }
 }
 
 // Implement http functions related to this request.
@@ -171,8 +178,9 @@ impl HttpContext for OAuthFilter {
         let headers = self.get_http_request_headers();
         let headers: Vec<(&str, &str)>
             = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
+        let user_session = self.session(&headers);
 
-        match self.oauther.handle_request(None, headers) {
+        match self.oauther.handle_request(user_session, headers) {
             Ok(oauther_action) => {
                 match self.oauth_action_handler(oauther_action) {
                     Ok(filter_action) => filter_action,
@@ -249,12 +257,19 @@ impl Context for OAuthFilter {
                             EmptyExtraTokenFields {}
                         );
 
-                        let action = self.oauther.handle_token_call_response(&"dummy".to_string(), &request);
+                        // TODO clean this up
+                        let headers = self.get_http_request_headers();
+                        let headers: Vec<(&str, &str)>
+                            = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
+
+
+                        let user_session = self.session(&headers);
+                        let action = self.oauther.handle_token_call_response(user_session, &request);
                         match action {
                             Ok(action) => {
                                 // TODO maybe bad to just ignore return here?
                                 match self.oauth_action_handler(action) {
-                                    Ok(_) => {} // TODO maybe seperate handling for token responses?
+                                    Ok(action) => {} // TODO maybe seperate handling for token responses?
                                     Err( status) => self.send_error(
                                         500,
                                         create_error(format!("ERROR when handling action, status{:?}", status)))

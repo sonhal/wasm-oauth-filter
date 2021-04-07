@@ -1,4 +1,4 @@
-use std::time::SystemTime;
+use std::time::{SystemTime, Duration};
 use serde::{Serialize, Deserialize};
 use crate::cache::SharedCache;
 use oauth2::http::{HeaderMap, HeaderValue};
@@ -33,7 +33,7 @@ impl Session {
         Session { id, data: SessionType::Empty }
     }
 
-    pub fn tokens(id: String, access_token: String, expires_in: Option<u32>, id_token: Option<String>, refresh_token: Option<String>) -> Session{
+    pub fn tokens(id: String, access_token: String, expires_in: Option<Duration>, id_token: Option<String>, refresh_token: Option<String>) -> Session{
         Session {
             id,
             data: SessionType::Tokens(AuthorizationTokens {
@@ -44,6 +44,14 @@ impl Session {
                 refresh_token
             }),
         }
+    }
+
+    pub fn verifiers(id: String, created_at: SystemTime, request_url: String, state: String, pcke_verifier: Option<String>) -> Session {
+        Session::from_verifier(id, AuthorizationResponseVerifiers {
+            created_at,
+            state: State { path: request_url, csrf_token: state },
+            pcke_verifier
+        })
     }
 
     pub fn from_headers(cookie_name: String, headers: Vec<(&str, &str)>, cache: &dyn SessionCache) -> Option<Session> {
@@ -86,7 +94,7 @@ impl Session {
     }
 
 
-    pub fn token_response(&self, access_token: String, expires_in: Option<Seconds>, id_token: Option<String>, refresh_token: Option<String>) -> SessionUpdate {
+    pub fn token_response(&self, access_token: String, expires_in: Option<Duration>, id_token: Option<String>, refresh_token: Option<String>) -> SessionUpdate {
         SessionUpdate { id: self.id.clone(), data: UpdateType::Tokens(AuthorizationTokens {
             created_at: SystemTime::now(),
             access_token,
@@ -111,12 +119,12 @@ pub struct SessionUpdate {
 }
 
 impl SessionUpdate {
-    pub fn auth_request(state: String , verifier: String) -> SessionUpdate {
+    pub fn auth_request(request_url: String, state: String , verifier: String) -> SessionUpdate {
         SessionUpdate {
             id: util::new_random_verifier(32).secret().to_owned(),
             data: UpdateType::AuthorizationRequest(AuthorizationResponseVerifiers {
                 created_at: SystemTime::now(),
-                state: State { path: "".to_string(), csrf_token: state },
+                state: State { path: request_url, csrf_token: state },
                 pcke_verifier: Some(verifier)
             })
         }
@@ -154,11 +162,18 @@ pub struct AuthorizationResponseVerifiers {
     pcke_verifier: Option<String>
 }
 
+impl AuthorizationResponseVerifiers {
+
+    pub fn request_url(&self) -> String {
+        self.state.path.clone()
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AuthorizationTokens {
     created_at: SystemTime,
     access_token: String,
-    expires_in: Option<Seconds>,
+    expires_in: Option<Duration>,
     id_token: Option<String>,
     refresh_token: Option<String>
 }
@@ -167,7 +182,7 @@ impl AuthorizationTokens {
     pub fn new(
         created_at: SystemTime,
         access_token: String,
-        expires_in: Option<Seconds>,
+        expires_in: Option<Duration>,
         id_token: Option<String>,
         refresh_token: Option<String>) -> AuthorizationTokens {
         AuthorizationTokens {
