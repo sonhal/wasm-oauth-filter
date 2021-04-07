@@ -1,5 +1,5 @@
 use std::collections::HashMap;
-use crate::oauther::{Cache, SessionData};
+use crate::oauth_service::{Cache, SessionData};
 use proxy_wasm::traits::Context;
 use serde::{Serialize, Deserialize};
 
@@ -120,7 +120,7 @@ mod tests {
     use crate::cache::SharedCache;
     use proxy_wasm::traits::Context;
     use proxy_wasm::types::{Status, Bytes};
-    use crate::oauther::Cache;
+    use crate::oauth_service::Cache;
 
     struct TestContext {
         data: Vec<u8>,

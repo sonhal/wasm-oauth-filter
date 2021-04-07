@@ -1,5 +1,5 @@
 mod util;
-pub mod oauther;
+pub mod oauth_service;
 pub mod mock_overrides;
 mod cache;
 mod session;
@@ -15,7 +15,7 @@ use oauth2::basic::{BasicTokenType};
 use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
 use oauth2::url::ParseError;
 use url::Url;
-use crate::oauther::OAuther;
+use crate::oauth_service::OAuthService;
 use crate::cache::{SharedCache};
 use oauth2::http::HeaderMap;
 use std::cell::RefCell;
@@ -41,7 +41,7 @@ struct OAuthRootContext {
 
 struct OAuthFilter {
     config: FilterConfig,
-    oauther: OAuther,
+    oauther: OAuthService,
     cache: Rc<RefCell<SharedCache>>,
 }
 
@@ -71,7 +71,7 @@ impl OAuthFilter {
 
 
         let cache = Rc::new(RefCell::new(cache));
-        let oauther = OAuther::new(config.clone(), Box::new(cache.clone()))?;
+        let oauther = OAuthService::new(config.clone(), Box::new(cache.clone()))?;
         Ok(OAuthFilter {
             config,
             oauther,
@@ -115,16 +115,16 @@ impl OAuthFilter {
         );
     }
 
-    fn oauth_action_handler(&self, action: oauther::Action) -> Result<Action, Status> {
+    fn oauth_action_handler(&self, action: oauth_service::Action) -> Result<Action, Status> {
         let mut cache = self.cache.borrow_mut();
         cache.store(self).unwrap(); // TODO, check if it is best called here
         match action {
-            oauther::Action::Redirect( url, headers, update) => {
+            oauth_service::Action::Redirect(url, headers, update) => {
                 // TODO store session update
                 self.respond_with_redirect(url, headers);
                 Ok(Action::Pause)
             }
-            oauther::Action::HttpCall( request) => {
+            oauth_service::Action::HttpCall(request) => {
                 let mut request_headers: Vec<(&str, &str)> = serialize_headers(&request.headers);
 
                 let token_url: Url = self.config.token_uri.parse().unwrap();
@@ -143,7 +143,7 @@ impl OAuthFilter {
                     Duration::from_secs(5))?;
                 Ok(Action::Pause)
             },
-            oauther::Action::Allow(additional_headers) => {
+            oauth_service::Action::Allow(additional_headers) => {
 
                 // TODO simplify and clean this this up
                 let old_headers: Vec<(String, String)> = self.get_http_request_headers();
