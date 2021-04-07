@@ -3,6 +3,7 @@ pub mod oauth_service;
 pub mod mock_overrides;
 mod cache;
 mod session;
+mod messages;
 
 
 use proxy_wasm::types::LogLevel;
