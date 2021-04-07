@@ -15,12 +15,13 @@ use oauth2::basic::{BasicTokenType};
 use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
 use oauth2::url::ParseError;
 use url::Url;
-use crate::oauth_service::OAuthService;
+use crate::oauth_service::{OAuthService, Cache};
 use crate::cache::{SharedCache};
 use oauth2::http::HeaderMap;
 use std::cell::RefCell;
 use std::rc::Rc;
 use cookie::Expiration::Session;
+use crate::session::SessionCache;
 
 
 #[cfg(not(test))]
@@ -117,10 +118,12 @@ impl OAuthFilter {
 
     fn oauth_action_handler(&self, action: oauth_service::Action) -> Result<Action, Status> {
         let mut cache = self.cache.borrow_mut();
-        cache.store(self).unwrap(); // TODO, check if it is best called here
+
         match action {
             oauth_service::Action::Redirect(url, headers, update) => {
                 // TODO store session update
+                cache.set(update);
+                cache.store(self).unwrap(); // TODO, check if it is best called here
                 self.respond_with_redirect(url, headers);
                 Ok(Action::Pause)
             }

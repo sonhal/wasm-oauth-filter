@@ -10,18 +10,18 @@ use crate::util;
 type Seconds = u32;
 
 pub trait SessionCache {
-    fn get(&self, id: &String) -> Option<UpdateType>;
+    fn get(&self, id: &String) -> Option<Session>;
     fn set(&mut self, session: SessionUpdate);
 }
 
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Session {
     id: String,
     pub data: SessionType,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub enum SessionType {
     AuthorizationRequest(AuthorizationResponseVerifiers),
     Tokens(AuthorizationTokens),
@@ -53,23 +53,16 @@ impl Session {
             Some(id) => {
                 match cache.get(&id) {
                     None => Some(Session::empty(id)),
-                    Some(session_type) => {
-                        match session_type {
-                            UpdateType::AuthorizationRequest(verifiers) =>
-                                Some(Session::from_verifier(id, verifiers)),
-                            UpdateType::Tokens(tokens) =>
-                                Some(Session::from_tokens(id, tokens)),
-                        }
-                    }
+                    Some(session) => Some(session)
                 }
             }
         }
     }
 
-    fn from_verifier(id: String, verifiers: AuthorizationResponseVerifiers) -> Session {
+    pub(crate) fn from_verifier(id: String, verifiers: AuthorizationResponseVerifiers) -> Session {
         Session {id, data: SessionType::AuthorizationRequest(verifiers) }
     }
-    fn from_tokens(id: String, tokens: AuthorizationTokens) -> Session{
+    pub(crate) fn from_tokens(id: String, tokens: AuthorizationTokens) -> Session{
         Session { id, data: SessionType::Tokens(tokens)}
     }
 
@@ -113,7 +106,7 @@ pub enum UpdateType {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SessionUpdate {
-    id: String,
+    pub id: String,
     data: UpdateType,
 }
 
@@ -142,6 +135,15 @@ impl SessionUpdate {
             .secure(true)
             .http_only(true)
             .finish().to_string()
+    }
+
+    pub fn create_session(&self) -> Session {
+        match &self.data {
+            UpdateType::AuthorizationRequest(verifiers) =>
+                Session::from_verifier(self.id.clone(), verifiers.clone()),
+            UpdateType::Tokens(tokens) =>
+                Session::from_tokens(self.id.clone(), tokens.clone()),
+        }
     }
 }
 
@@ -211,10 +213,15 @@ mod tests {
     }
 
     impl SessionCache for TestCache {
-        fn get(&self, id: &String) -> Option<UpdateType> {
+        fn get(&self, id: &String) -> Option<Session> {
             match self.sessions.get(id) {
                 None => None,
-                Some(session_type ) => Some(session_type.to_owned())
+                Some(session_type ) => match session_type {
+                    UpdateType::AuthorizationRequest(verifiers) =>
+                        Some(Session::from_verifier(id.clone(), verifiers.clone())),
+                    UpdateType::Tokens(tokens) =>
+                        Some(Session::from_tokens(id.clone(), tokens.clone())),
+                }
             }
         }
         fn set(&mut self, session: SessionUpdate) {

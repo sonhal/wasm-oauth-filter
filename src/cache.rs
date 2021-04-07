@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use crate::oauth_service::{Cache, SessionData};
 use proxy_wasm::traits::Context;
 use serde::{Serialize, Deserialize};
+use crate::session::{SessionCache, SessionUpdate, UpdateType, Session};
 
 
 pub struct LocalCache {
@@ -51,7 +52,7 @@ impl Cache for LocalCache {
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SharedCache {
-    sessions: HashMap<String, SessionData>,
+    sessions: HashMap<String, Session>,
 }
 
 const SHARED_SESSIONS_KEY: &str = "SHARED_SESSIONS";
@@ -91,27 +92,29 @@ impl SharedCache {
 
 impl Cache for SharedCache {
     fn get_tokens_for_session(&self, session: &String) -> Option<&SessionData> {
-        if let Some(tokens) = self.sessions.get(session) {
-            return Some(tokens)
-        };
-        None
+        unimplemented!()
     }
 
     fn set_tokens_for_session(&mut self, session: &String, access_token: &String, id_token: Option<&String>) {
-        let access_token = access_token.to_string();
-        let id_token: Option<String> = match id_token {
-            None => None,
-            Some(token) => Some(token.to_string()),
-        };
-        self.sessions.insert(session.to_string(), SessionData { access_token, id_token});
+        unimplemented!()
     }
 
     fn get_verifier_for_state(&self, _: &String) -> Option<&String> {
-        return None
+        unimplemented!()
     }
 
     fn set_verifier_for_state(&mut self, _: &String, _: &String) {
-        // Todo
+        unimplemented!()
+    }
+}
+
+impl SessionCache for SharedCache {
+    fn get(&self, id: &String) -> Option<Session> {
+        self.sessions.get(id).cloned()
+    }
+
+    fn set(&mut self, update: SessionUpdate) {
+        self.sessions.insert(update.id.clone(), update.create_session());
     }
 }
 
@@ -121,6 +124,7 @@ mod tests {
     use proxy_wasm::traits::Context;
     use proxy_wasm::types::{Status, Bytes};
     use crate::oauth_service::Cache;
+    use crate::session::{SessionCache, SessionUpdate, SessionType};
 
     struct TestContext {
         data: Vec<u8>,
@@ -146,18 +150,23 @@ mod tests {
         let mut cache = SharedCache::new();
         let mut test_context = TestContext { data: Vec::new() };
 
-        cache.set_tokens_for_session(
-            &"testsession".to_string(),
-            &"testaccces".to_string(),
-            None);
+        let test_update = SessionUpdate::auth_request("abc".to_string(), "123".to_string());
+        let test_id = test_update.id.clone();
+        cache.set(test_update);
 
         let serialized = serde_json::to_string(&cache).unwrap();
         test_context.data = serialized.into_bytes();
 
         let new_cache = SharedCache::from_host(&test_context).unwrap();
-        let tokens = new_cache.get_tokens_for_session(&"testsession".to_string());
-        if let Some(tokens) = tokens {
-            assert_eq!(tokens.access_token, "testaccces")
+        let session = new_cache.get(&test_id);
+        if let Some(session) = session {
+            match session.data {
+                SessionType::AuthorizationRequest(verifiers) => {
+
+                }
+                SessionType::Tokens(_) => panic!(),
+                SessionType::Empty => panic!(),
+            }
         } else {
             panic!("Bad deserialization")
         }
