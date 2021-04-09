@@ -109,28 +109,7 @@ impl OAuthService {
         }
     }
 
-    fn session_cookie(&self, headers: &Vec<(&str, &str)>) -> Option<String> {
-        let cookies: Option<&(&str, &str)> =
-            headers.iter().find( |(name, _ )| { *name == "cookie" } );
-        return match cookies {
-            Some(cookies) => {
-                let cookies: Vec<&str> = cookies.1.split(";").collect();
-                for cookie_string in cookies {
-                    let cookie_name_end = cookie_string.find('=').unwrap_or(0);
-                    let cookie_name = &cookie_string[0..cookie_name_end];
-                    if cookie_name.trim() == self.config.cookie_name {
-                        return Some(cookie_string[(cookie_name_end + 1)..cookie_string.len()].to_string().to_owned());
-                    }
-                }
-                None
-            },
-            None => None
-        }
-    }
-
     fn authorization_server_redirect(&self) -> (Url, String, String) {
-        // TODO cache verifier for use in the token call
-
         let verifier = util::new_random_verifier(32);
         let pkce_challenge=
             PkceCodeChallenge::from_code_verifier_sha256(&verifier);
@@ -147,14 +126,6 @@ impl OAuthService {
         let closure_verifier = PkceCodeVerifier::new(verifier.secret().clone());
 
         (auth_url, closure_state, closure_verifier.secret().to_string())
-    }
-
-    fn allow_headers(&self, token: &String) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(format!("bearer {}",token).as_str()).unwrap());
-        headers
     }
 
     fn request_auth_code(&self, headers: &Vec<(&str, &str)>) -> Option<String> {
@@ -177,7 +148,17 @@ impl OAuthService {
         None
     }
 
-    fn create_token_request(&self, code: String) -> HttpRequest {
+    fn create_token_request(&self, code: String, code_verifier: Option<String>) -> HttpRequest {
+        let mut params = vec![("grant_type", "authorization_code"), ("code", code.as_str())];
+
+        // if we have a PKCE verifer we send it in the token request
+        let mut verifier_string;
+        if code_verifier.is_some() {
+            verifier_string = code_verifier.unwrap();
+            params.push(("code_verifier", verifier_string.as_str()))
+        }
+
+
         util::token_request(
             &AuthType::RequestBody,
             &(self.config.client_id),
@@ -186,7 +167,8 @@ impl OAuthService {
             Some(&RedirectUrl::from_url(self.config.redirect_url.clone())),
             None,
             &TokenUrl::from_url(self.config.token_url.clone()),
-            vec![("grant_type", "authorization_code"), ("code", code.as_str())])
+            params
+            )
     }
 
     fn request_url(&self, headers: &Vec<(&str, &str)>) -> Result<String, String> {
@@ -251,13 +233,12 @@ impl State for SessionCookiePresent {
         if let Some(session) = session {
             match &session.data {
                 SessionType::Empty => Response::NewState( Box::new(NoValidSession {})),
-                SessionType::AuthorizationRequest(..) => {
+                SessionType::AuthorizationRequest(verifiers) => {
                     let code = oauth.request_auth_code(header);
                     match code {
                         None => Response::NewState( Box::new(NoValidSession {})),
                         Some(code) => {
-                            // TODO include PKCE
-                            let request = oauth.create_token_request(code);
+                            let request = oauth.create_token_request(code, verifiers.code_verifiers());
                             Response::NewAction(ServiceAction::HttpCall(request))
                         }
                     }
@@ -412,13 +393,6 @@ mod tests {
     }
 
     #[test]
-    fn session_cookie() {
-        let test_headers = vec![("cookie", "sessioncookie=value")];
-        let oauth= test_oauther();
-        assert_eq!(oauth.session_cookie(&test_headers).unwrap(), "value");
-    }
-
-    #[test]
     fn auth_code_header() {
         let oauth= test_oauther();
         let authority = oauth.config.authorization_url.origin().unicode_serialization();
@@ -532,7 +506,7 @@ mod tests {
                 ("x-forwarded-proto", "http")
             ]);
 
-        assert!(matches!(action, Ok(Action::HttpCall(http_request))));
+        assert!(matches!(&action, Ok(Action::HttpCall(http_request))));
 
         let token_call_response = StandardTokenResponse::new(
             AccessToken::new("myaccesstoken".to_string()),

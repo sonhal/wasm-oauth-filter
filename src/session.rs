@@ -167,6 +167,10 @@ impl AuthorizationResponseVerifiers {
     pub fn request_url(&self) -> String {
         self.state.path.clone()
     }
+
+    pub fn code_verifiers(&self) -> Option<String> {
+        self.pcke_verifier.clone()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
