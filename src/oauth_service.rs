@@ -327,10 +327,8 @@ mod tests {
     use std::borrow::Borrow;
     use std::collections::HashMap;
     use oauth2::{AccessToken, StandardTokenResponse, EmptyExtraTokenFields};
-    use oauth2::http::header::FORWARDED;
-    use crate::TokenResponse;
+    use oauth2::http::header::{FORWARDED, SET_COOKIE, AUTHORIZATION};
     use oauth2::basic::{BasicTokenResponse, BasicTokenType};
-    use crate::cache::LocalCache;
     use crate::session::{AuthorizationTokens, AuthorizationResponseVerifiers};
     use std::alloc::System;
     use std::time::SystemTime;
