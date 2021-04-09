@@ -1,20 +1,17 @@
 use std::collections::HashMap;
-use crate::oauth_service::{SessionData};
 use proxy_wasm::traits::Context;
 use serde::{Serialize, Deserialize};
 use crate::session::{SessionCache, SessionUpdate, UpdateType, Session};
 
 
 pub struct LocalCache {
-    sessions: HashMap<String, SessionData>,
-    verifiers: HashMap<String, String>
+    sessions: HashMap<String, Session>,
 }
 
 impl LocalCache {
     pub fn new() -> LocalCache {
         LocalCache {
             sessions: HashMap::new(),
-            verifiers: HashMap::new()
         }
     }
 }

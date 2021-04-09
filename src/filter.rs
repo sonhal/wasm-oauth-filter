@@ -128,7 +128,7 @@ impl OAuthFilter {
                 self.respond_with_redirect(url, headers);
                 Ok(Action::Pause)
             }
-            oauth_service::Action::HttpCall(request) => {
+            oauth_service::Action::TokenRequest(request) => {
                 let mut request_headers: Vec<(&str, &str)> = serialize_headers(&request.headers);
 
                 let token_url: Url = self.config.token_uri.parse().unwrap();

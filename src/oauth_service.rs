@@ -25,14 +25,8 @@ pub struct OAuthService {
 #[derive(Debug)]
 pub enum Action {
     Redirect(Url, HeaderMap, SessionUpdate),
-    HttpCall(HttpRequest),
+    TokenRequest(HttpRequest),
     Allow(HeaderMap)
-}
-
-#[derive(Debug, Serialize, Deserialize)]
-pub struct SessionData {
-    pub(crate) access_token: String,
-    pub(crate) id_token: Option<String>,
 }
 
 trait State: Debug {
@@ -89,7 +83,7 @@ impl OAuthService {
                     Ok(Action::Allow(headers))
                 },
                 ServiceAction::HttpCall(request) =>
-                    Ok(Action::HttpCall(request)),
+                    Ok(Action::TokenRequest(request)),
             }
         }
     }
@@ -102,7 +96,7 @@ impl OAuthService {
                     ServiceAction::Redirect(url, headers, update) => {
                         Ok(Action::Redirect(url, headers, update))
                     }
-                    ServiceAction::HttpCall(request) => Ok(Action::HttpCall(request)),
+                    ServiceAction::HttpCall(request) => Ok(Action::TokenRequest(request)),
                     ServiceAction::Allow(headers) => Ok(Action::Allow(headers)),
                 }
             }
@@ -479,7 +473,7 @@ mod tests {
                 (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str()),
                 ("x-forwarded-proto", "http")
             ]);
-        if let Ok(Action::HttpCall( http_request )) = action {
+        if let Ok(Action::TokenRequest(http_request )) = action {
             assert_eq!(http_request.url.as_str(), oauth.config.token_url.as_str())
         } else {panic!("action should be to HttpCall")}
     }
@@ -506,7 +500,7 @@ mod tests {
                 ("x-forwarded-proto", "http")
             ]);
 
-        assert!(matches!(&action, Ok(Action::HttpCall(http_request))));
+        assert!(matches!(&action, Ok(Action::TokenRequest(http_request))));
 
         let token_call_response = StandardTokenResponse::new(
             AccessToken::new("myaccesstoken".to_string()),
