@@ -1,20 +1,7 @@
 use std::collections::HashMap;
 use proxy_wasm::traits::Context;
 use serde::{Serialize, Deserialize};
-use crate::session::{SessionCache, SessionUpdate, UpdateType, Session};
-
-
-pub struct LocalCache {
-    sessions: HashMap<String, Session>,
-}
-
-impl LocalCache {
-    pub fn new() -> LocalCache {
-        LocalCache {
-            sessions: HashMap::new(),
-        }
-    }
-}
+use crate::session::{SessionCache, SessionUpdate, Session};
 
 
 #[derive(Debug, Serialize, Deserialize)]

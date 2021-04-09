@@ -1,17 +1,10 @@
 use crate::{FilterConfig, util};
 use oauth2::{ClientSecret, ClientId, TokenUrl, PkceCodeChallenge, AuthUrl, RedirectUrl, CsrfToken, Scope, PkceCodeVerifier, HttpRequest, AuthType, StandardTokenResponse, EmptyExtraTokenFields, TokenResponse};
 use url;
-use cookie::{Cookie, CookieBuilder};
 use crate::oauth_service::Response::{NewAction, NewState};
 use url::{Url, ParseError};
 use oauth2::basic::{BasicClient, BasicTokenType};
-
-use serde::{Serialize, Deserialize};
-use oauth2::http::{HeaderMap, HeaderValue};
-use oauth2::http::header::{SET_COOKIE, AUTHORIZATION};
-use std::cell::{RefCell, RefMut};
-use std::rc::Rc;
-use std::ops::Deref;
+use oauth2::http::{HeaderMap};
 use std::fmt::Debug;
 use crate::session::{Session, SessionUpdate, SessionType};
 
@@ -146,7 +139,7 @@ impl OAuthService {
         let mut params = vec![("grant_type", "authorization_code"), ("code", code.as_str())];
 
         // if we have a PKCE verifer we send it in the token request
-        let mut verifier_string;
+        let verifier_string;
         if code_verifier.is_some() {
             verifier_string = code_verifier.unwrap();
             params.push(("code_verifier", verifier_string.as_str()))

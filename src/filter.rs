@@ -10,21 +10,19 @@ use proxy_wasm::types::LogLevel;
 use proxy_wasm::traits::*;
 use proxy_wasm::types::*;
 use std::time::Duration;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize};
 use url;
 use oauth2::basic::{BasicTokenType};
-use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields, TokenResponse};
+use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
 use oauth2::url::ParseError;
 use url::Url;
 use crate::oauth_service::{OAuthService};
 use crate::cache::{SharedCache};
 use oauth2::http::HeaderMap;
 use std::cell::RefCell;
-use std::rc::Rc;
-use cookie::Expiration::Session;
 use crate::session::{SessionCache};
 use std::ops::Deref;
-use crate::messages::{ErrorResponse, ErrorBody};
+use crate::messages::{ErrorBody};
 
 
 #[cfg(not(test))]
@@ -100,11 +98,6 @@ impl OAuthFilter {
                             message,
                             None)
         );
-    }
-
-    fn fail(&mut self) {
-      log::debug!("auth: allowed");
-      self.send_http_response(403, vec![], Some(b"not authorized"));
     }
 
     fn respond_with_redirect(&self, url: Url, headers: HeaderMap) {
@@ -236,7 +229,7 @@ impl Context for OAuthFilter {
                                 Ok(action) => {
                                     // TODO maybe bad to just ignore return here?
                                     match self.oauth_action_handler(action) {
-                                        Ok(action) => {} // TODO maybe seperate handling for token responses?
+                                        Ok(_) => {} // TODO maybe seperate handling for token responses?
                                         Err( status) => self.send_error(
                                             500,
                                             ErrorBody::new("500".to_string(), format!("ERROR when handling action, status{:?}", status), None))

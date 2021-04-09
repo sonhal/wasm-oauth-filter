@@ -1,19 +1,15 @@
 use std::time::{SystemTime, Duration};
 use serde::{Serialize, Deserialize};
-use crate::cache::SharedCache;
 use oauth2::http::{HeaderMap, HeaderValue};
 use oauth2::http::header::{AUTHORIZATION, SET_COOKIE};
-use proxy_wasm::types::BufferType::UpstreamData;
-use cookie::{CookieBuilder, Cookie};
+use cookie::{CookieBuilder};
 use crate::util;
 
-type Seconds = u32;
 
 pub trait SessionCache {
     fn get(&self, id: &String) -> Option<Session>;
     fn set(&mut self, session: SessionUpdate);
 }
-
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct Session {
