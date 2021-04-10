@@ -1,15 +1,19 @@
 use crate::{FilterConfig, util};
 use oauth2::{ClientSecret, ClientId, TokenUrl, PkceCodeChallenge, AuthUrl, RedirectUrl, CsrfToken, Scope, PkceCodeVerifier, HttpRequest, AuthType, StandardTokenResponse, EmptyExtraTokenFields, TokenResponse};
 use url;
-use crate::oauth_service::Response::{NewAction, NewState};
+use crate::oauth_client::Response::{NewAction, NewState};
 use url::{Url, ParseError};
 use oauth2::basic::{BasicClient, BasicTokenType};
 use oauth2::http::{HeaderMap};
 use std::fmt::Debug;
 use crate::session::{Session, SessionUpdate, SessionType};
+use crate::messages::SuccessfulResponse;
+use std::time::{Duration, SystemTimeError};
 
 
-pub struct OAuthService {
+// OAuth 2.0 and OpenID Connect service
+// Note that most of the names for structs, functions and methods are borrowed from OAuth 2.0
+pub struct OAuthClient {
     config: ServiceConfig,
     state: Box<dyn State>,
     client: BasicClient,
@@ -23,12 +27,15 @@ pub enum Action {
 }
 
 trait State: Debug {
-    fn handle_request(&self, session: &Option<Session>, oauth: &OAuthService, header: &Vec<(&str, &str)>) -> Response;
-    fn handle_token_call_response(
-        &self, oauth: &OAuthService,
+    fn handle_request(&self, session: &Option<Session>, oauth: &OAuthClient, header: &Vec<(&str, &str)>) -> Response;
+    fn handle_token_response(
+        &self, oauth: &OAuthClient,
         session: &Option<Session>,
-        token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>
-    ) -> Response;
+        token_response: &SuccessfulResponse
+    ) -> Response {
+        log::warn!("received token response in state={:?}", self);
+        Response::NewState(Box::new(NoValidSession {} ))
+    }
 
     fn debug_entering(&self, session: &Option<Session>, headers: &Vec<(&str, &str)>) {
         crate::log_debug(
@@ -40,10 +47,40 @@ trait State: Debug {
     }
 }
 
-impl OAuthService {
+enum Response {
+    NewState(Box<dyn State>),
+    NewAction(ServiceAction),
+}
+
+enum ServiceAction {
+    Redirect(Url, HeaderMap, SessionUpdate),
+    TokenRequest(HttpRequest),
+    Allow(HeaderMap)
+}
+
+#[derive(Debug)]
+struct Start { }
+#[derive(Debug)]
+struct NoValidSession { }
+#[derive(Debug)]
+struct ActiveSession {
+    session: Session,
+}
+
+struct ServiceConfig {
+    cookie_name: String,
+    redirect_url: url::Url,
+    authorization_url: url::Url,
+    token_url: url::Url,
+    client_id: ClientId,
+    client_secret: ClientSecret
+}
+
+
+impl OAuthClient {
     pub fn new(
         config: FilterConfig,
-    ) -> Result<OAuthService, ParseError> {
+    ) -> Result<OAuthClient, ParseError> {
         let auther_config = ServiceConfig::from(config);
 
         let client = BasicClient::new(
@@ -54,7 +91,7 @@ impl OAuthService {
             )
                 .set_redirect_url(RedirectUrl::from_url(auther_config.redirect_url.clone()));
 
-        Ok(OAuthService {
+        Ok(OAuthClient {
             config: auther_config,
             state: Box::new(Start { }),
             client,
@@ -75,21 +112,21 @@ impl OAuthService {
                 ServiceAction::Allow(headers) => {
                     Ok(Action::Allow(headers))
                 },
-                ServiceAction::HttpCall(request) =>
+                ServiceAction::TokenRequest(request) =>
                     Ok(Action::TokenRequest(request)),
             }
         }
     }
 
-    pub fn handle_token_call_response(&mut self, session: Option<Session>, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Result<Action, String> {
-        match self.state.handle_token_call_response(self, &session, token_response) {
+    pub fn handle_token_call_response(&mut self, session: Option<Session>, token_response: &SuccessfulResponse) -> Result<Action, String> {
+        match self.state.handle_token_response(self, &session, token_response) {
             NewState(state) => Err(format!("ERROR, invalid state returned NewState={:?}", state)),
             NewAction( action) => {
                 match action {
                     ServiceAction::Redirect(url, headers, update) => {
                         Ok(Action::Redirect(url, headers, update))
                     }
-                    ServiceAction::HttpCall(request) => Ok(Action::TokenRequest(request)),
+                    ServiceAction::TokenRequest(request) => Ok(Action::TokenRequest(request)),
                     ServiceAction::Allow(headers) => Ok(Action::Allow(headers)),
                 }
             }
@@ -179,24 +216,20 @@ impl OAuthService {
 
 impl State for Start  {
 
-    fn handle_request(&self, session: &Option<Session>, _: &OAuthService, header: &Vec<(&str, &str)>) -> Response {
+    fn handle_request(&self, session: &Option<Session>, _: &OAuthClient, header: &Vec<(&str, &str)>) -> Response {
         self.debug_entering(&session, header);
         // check cookie
         match session {
-            Some( session ) => NewState(Box::new(SessionCookiePresent { session: session.clone() })),
+            Some( session ) => NewState(Box::new(ActiveSession { session: session.clone() })),
             None => {
                 Response::NewState(Box::new(NoValidSession { }))
             },
         }
     }
-
-    fn handle_token_call_response(&self, _: &OAuthService, _: &Option<Session>, _: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
-        unreachable!()
-    }
 }
 
 impl State for NoValidSession {
-    fn handle_request(&self, session: &Option<Session>, oauth: &OAuthService, header: &Vec<(&str, &str)>) -> Response {
+    fn handle_request(&self, session: &Option<Session>, oauth: &OAuthClient, header: &Vec<(&str, &str)>) -> Response {
         self.debug_entering(&session, header);
 
 
@@ -207,14 +240,10 @@ impl State for NoValidSession {
         let headers = new_session.set_cookie_header(&oauth.config.cookie_name);
         NewAction(ServiceAction::Redirect(url, headers, new_session))
     }
-
-    fn handle_token_call_response(&self, _: &OAuthService, _: &Option<Session>, _: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
-        unreachable!()
-    }
 }
 
-impl State for SessionCookiePresent {
-    fn handle_request(&self, session: &Option<Session>, oauth: &OAuthService, header: &Vec<(&str, &str)>) -> Response {
+impl State for ActiveSession {
+    fn handle_request(&self, session: &Option<Session>, oauth: &OAuthClient, header: &Vec<(&str, &str)>) -> Response {
         self.debug_entering(&session, header);
 
         if let Some(session) = session {
@@ -226,14 +255,27 @@ impl State for SessionCookiePresent {
                         None => Response::NewState( Box::new(NoValidSession {})),
                         Some(code) => {
                             let request = oauth.create_token_request(code, verifiers.code_verifiers());
-                            Response::NewAction(ServiceAction::HttpCall(request))
+                            Response::NewAction(ServiceAction::TokenRequest(request))
                         }
                     }
                 },
                 SessionType::Tokens(tokens) => {
                     // TODO maybe validate expiry? But it is probably RS responsibility
-                    // TODO fix hack where we just take the first token in the list
-                    Response::NewAction(ServiceAction::Allow(tokens.bearer()))
+                    match tokens.is_access_token_valid() {
+                        Ok(is_valid) => {
+                            match is_valid {
+                                true => Response::NewAction(ServiceAction::Allow(tokens.bearer())),
+                                false => {
+                                    // TODO use refresh token if valid
+                                    Response::NewState(Box::new(NoValidSession {}))
+                                }
+                            }
+                        }
+                        Err(err) => {
+                            panic!("Error when getting system time: {}", err);
+                        }
+                    }
+
                 }
             }
         } else {
@@ -242,21 +284,19 @@ impl State for SessionCookiePresent {
         }
     }
 
-    fn handle_token_call_response(&self, _: &OAuthService, _: &Option<Session>, token_response: &StandardTokenResponse<EmptyExtraTokenFields, BasicTokenType>) -> Response {
-        let access_token = token_response.access_token().secret().clone();
+    fn handle_token_response(&self, _: &OAuthClient, _: &Option<Session>, token_response: &SuccessfulResponse) -> Response {
+        let access_token = token_response.access_token.clone();
+        let id_token = token_response.id_token.clone();
         let expires_in = token_response.expires_in();
-        let refresh_token: Option<String> = token_response.refresh_token()
-            .and_then(
-                |token|
-                    { Some(token.secret().clone())}
-            );
+        let refresh_token = token_response.id_token.clone();
+
 
         match &self.session.data {
             SessionType::AuthorizationRequest(verifiers) => {
                 Response::NewAction(ServiceAction::Redirect(
                     verifiers.request_url().parse().unwrap(),
                     HeaderMap::new(),
-                    self.session.token_response(access_token, expires_in, None, refresh_token),
+                    self.session.token_response(access_token, expires_in, id_token, refresh_token),
                 ))
             }
             SessionType::Tokens(_) => {
@@ -271,35 +311,6 @@ impl State for SessionCookiePresent {
     }
 }
 
-
-enum Response {
-    NewState(Box<dyn State>),
-    NewAction(ServiceAction),
-}
-
-enum ServiceAction {
-    Redirect(Url, HeaderMap, SessionUpdate),
-    HttpCall(HttpRequest),
-    Allow(HeaderMap)
-}
-
-#[derive(Debug)]
-struct Start { }
-#[derive(Debug)]
-struct NoValidSession { }
-#[derive(Debug)]
-struct SessionCookiePresent {
-    session: Session,
-}
-
-struct ServiceConfig {
-    cookie_name: String,
-    redirect_url: url::Url,
-    authorization_url: url::Url,
-    token_url: url::Url,
-    client_id: ClientId,
-    client_secret: ClientSecret
-}
 
 impl ServiceConfig {
     fn from(config: FilterConfig) -> ServiceConfig {
@@ -323,7 +334,7 @@ mod tests {
     use super::*;
     use std::any::Any;
     use std::matches;
-    use crate::oauth_service::ServiceAction::Redirect;
+    use crate::oauth_client::ServiceAction::Redirect;
     use std::borrow::Borrow;
     use std::collections::HashMap;
     use oauth2::{AccessToken, StandardTokenResponse, EmptyExtraTokenFields};
@@ -361,8 +372,8 @@ mod tests {
         session.unwrap()
     }
 
-    fn test_oauther() -> OAuthService {
-        OAuthService::new(
+    fn test_client() -> OAuthClient {
+        OAuthClient::new(
             test_config(),
         ).unwrap()
     }
@@ -370,7 +381,7 @@ mod tests {
 
     #[test]
     fn new() {
-        let oauth= test_oauther();
+        let oauth= test_client();
         assert_eq!(
             oauth.config.authorization_url.as_str(),
             "http://authorization/"
@@ -379,7 +390,7 @@ mod tests {
 
     #[test]
     fn auth_code_header() {
-        let oauth= test_oauther();
+        let oauth= test_client();
         let authority = oauth.config.authorization_url.origin().unicode_serialization();
         let test_headers = vec![
             ("cookie", "sessioncookie=mysession"),
@@ -391,7 +402,7 @@ mod tests {
 
     #[test]
     fn unauthorized_request() {
-        let mut oauth = test_oauther();
+        let mut oauth = test_client();
 
         let action = oauth.handle_request(
             None,
@@ -410,7 +421,7 @@ mod tests {
 
     #[test]
     fn session_cookie_present_but_no_token_in_cache_request() {
-        let mut oauth= test_oauther();
+        let mut oauth= test_client();
 
         let session= Session::empty("sessionid".to_string());
 
@@ -424,7 +435,7 @@ mod tests {
 
     #[test]
     fn session_cookie_present_and_valid_token_in_cache_request() {
-        let mut oauth= test_oauther();
+        let mut oauth= test_client();
 
         let session = Session::tokens(
             "mysession".to_string(),
@@ -448,7 +459,7 @@ mod tests {
 
     #[test]
     fn session_cookie_present_no_valid_token_in_cache_but_auth_code_in_query() {
-        let mut oauth= test_oauther();
+        let mut oauth= test_client();
         let session = Session::verifiers(
             "mysession".to_string(),
             SystemTime::now(),
@@ -471,7 +482,7 @@ mod tests {
 
     #[test]
     fn handle_valid_token_call_response() {
-        let mut oauth= test_oauther();
+        let mut oauth= test_client();
         let session_id = "testsession";
         let protected_api = "http://proxy:8081/resource";
         let session = Session::verifiers(
@@ -493,10 +504,13 @@ mod tests {
 
         assert!(matches!(&action, Ok(Action::TokenRequest(http_request))));
 
-        let token_call_response = StandardTokenResponse::new(
-            AccessToken::new("myaccesstoken".to_string()),
-        BasicTokenType::Bearer,
-        EmptyExtraTokenFields { });
+        let token_call_response = SuccessfulResponse::new(
+            "myaccesstoken".to_string(),
+            None,
+            Some("bearer".to_string()),
+            None,
+            Some(3600)
+        );
 
         let action = oauth.handle_token_call_response(Some(session), &token_call_response);
         if let Ok(Action::Redirect( url, headers, update)) = action {
@@ -507,7 +521,7 @@ mod tests {
 
     #[test]
     fn valid_session() {
-        let mut oauth = test_oauther();
+        let mut oauth = test_client();
 
         let session = Session::tokens(
             "testsession".to_string(),

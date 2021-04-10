@@ -1,4 +1,4 @@
-use std::time::{SystemTime, Duration};
+use std::time::{SystemTime, Duration, SystemTimeError};
 use serde::{Serialize, Deserialize};
 use oauth2::http::{HeaderMap, HeaderValue};
 use oauth2::http::header::{AUTHORIZATION, SET_COOKIE};
@@ -200,6 +200,12 @@ impl AuthorizationTokens {
             AUTHORIZATION,
             HeaderValue::from_str(format!("bearer {}",self.access_token).as_str()).unwrap());
         headers
+    }
+
+    // Returns true or false depending on if the access_token is still valid
+    pub fn is_access_token_valid(&self) -> Result<bool, SystemTimeError>{
+        if self.expires_in.is_none() {return Ok(false)}
+        Ok(SystemTime::now().duration_since(self.created_at)? < self.expires_in.unwrap())
     }
 }
 

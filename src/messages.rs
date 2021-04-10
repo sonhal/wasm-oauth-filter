@@ -1,4 +1,5 @@
 use serde::{Serialize, Deserialize};
+use std::time::Duration;
 
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -31,7 +32,30 @@ pub struct SuccessfulResponse {
     pub id_token: Option<String>,
     pub token_type: Option<String>,
     pub scope: Option<String>,
-    pub expires_in: Option<u64>
+    expires_in: Option<u64>
+}
+
+impl SuccessfulResponse {
+
+    pub fn new(access_token: String,
+           id_token: Option<String>,
+           token_type: Option<String>,
+           scope: Option<String>,
+           expires_in: Option<u64>) -> SuccessfulResponse {
+        SuccessfulResponse {
+            access_token,
+            id_token,
+            token_type,
+            scope,
+            expires_in
+        }
+    }
+
+    pub fn expires_in(&self) -> Option<Duration> {
+        if self.expires_in.is_none() { return None }
+        Some(Duration::from_secs(self.expires_in.unwrap()))
+    }
+
 }
 
 

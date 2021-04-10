@@ -1,5 +1,5 @@
 mod util;
-pub mod oauth_service;
+pub mod oauth_client;
 pub mod mock_overrides;
 mod cache;
 mod session;
@@ -16,7 +16,7 @@ use oauth2::basic::{BasicTokenType};
 use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
 use oauth2::url::ParseError;
 use url::Url;
-use crate::oauth_service::{OAuthService};
+use crate::oauth_client::{OAuthClient};
 use crate::cache::{SharedCache};
 use oauth2::http::HeaderMap;
 use std::cell::RefCell;
@@ -43,7 +43,7 @@ struct OAuthRootContext {
 
 struct OAuthFilter {
     config: FilterConfig,
-    oauther: OAuthService,
+    oauth_client: OAuthClient,
     cache: RefCell<SharedCache>,
 }
 
@@ -72,10 +72,10 @@ impl OAuthFilter {
         log_info(format!("Cache state={:?}", cache).as_str());
         let cache = RefCell::new(cache);
 
-        let oauther = OAuthService::new(config.clone())?;
+        let oauther = OAuthClient::new(config.clone())?;
         Ok(OAuthFilter {
             config,
-            oauther,
+            oauth_client: oauther,
             cache
         })
     }
@@ -112,16 +112,16 @@ impl OAuthFilter {
         );
     }
 
-    fn oauth_action_handler(&self, action: oauth_service::Action) -> Result<Action, Status> {
+    fn oauth_action_handler(&self, action: oauth_client::Action) -> Result<Action, Status> {
         let mut cache = self.cache.borrow_mut();
         match action {
-            oauth_service::Action::Redirect(url, headers, update) => {
+            oauth_client::Action::Redirect(url, headers, update) => {
                 cache.set(update);
                 cache.store(self).unwrap();
                 self.respond_with_redirect(url, headers);
                 Ok(Action::Pause)
             }
-            oauth_service::Action::TokenRequest(request) => {
+            oauth_client::Action::TokenRequest(request) => {
                 let mut request_headers: Vec<(&str, &str)> = serialize_headers(&request.headers);
 
                 let token_url: Url = self.config.token_uri.parse().unwrap();
@@ -140,7 +140,7 @@ impl OAuthFilter {
                     Duration::from_secs(5))?;
                 Ok(Action::Pause)
             },
-            oauth_service::Action::Allow(additional_headers) => {
+            oauth_client::Action::Allow(additional_headers) => {
 
                 // TODO simplify and clean this this up
                 let old_headers: Vec<(String, String)> = self.get_http_request_headers();
@@ -175,7 +175,7 @@ impl HttpContext for OAuthFilter {
             = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
         let user_session = self.session(&headers);
 
-        match self.oauther.handle_request(user_session, headers) {
+        match self.oauth_client.handle_request(user_session, headers) {
             Ok(oauther_action) => {
                 match self.oauth_action_handler(oauther_action) {
                     Ok(filter_action) => filter_action,
@@ -211,11 +211,6 @@ impl Context for OAuthFilter {
                             self.send_error(500, response.to_error_body()),
                         crate::messages::TokenResponse::Success(response) => {
                             log::debug!("access token found");
-                            let request = StandardTokenResponse::new(
-                                AccessToken::new(response.access_token),
-                                BasicTokenType::Bearer,
-                                EmptyExtraTokenFields {}
-                            );
 
                             // TODO clean this up
                             let headers = self.get_http_request_headers();
@@ -224,7 +219,7 @@ impl Context for OAuthFilter {
 
 
                             let user_session = self.session(&headers);
-                            let action = self.oauther.handle_token_call_response(user_session, &request);
+                            let action = self.oauth_client.handle_token_call_response(user_session, &response);
                             match action {
                                 Ok(action) => {
                                     // TODO maybe bad to just ignore return here?
