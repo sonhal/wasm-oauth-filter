@@ -440,7 +440,7 @@ mod tests {
         let session = Session::tokens(
             "mysession".to_string(),
             "testtoken".to_string(),
-            None,
+            Some(Duration::from_secs(120)),
             None,
             None,
         );
@@ -449,7 +449,8 @@ mod tests {
             Some(session),
             vec![
                 ("cookie", format!("{}=mysession", oauth.config.cookie_name).as_str()),
-                 ("x-forwarded-proto", "http")
+                (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str()),
+                ("x-forwarded-proto", "http")
             ]
         );
         if let Ok(Action::Allow( headers )) = action {
@@ -526,14 +527,20 @@ mod tests {
         let session = Session::tokens(
             "testsession".to_string(),
             "myaccesstoken".to_string(),
-            None,
+            Some(Duration::from_secs(120)),
             None,
             None
         );
 
         let action = oauth.handle_request(
             Some(session),
-            vec![("cookie", "sessioncookie=testsession"), (":path", "/"),]);
+            vec![
+                 ("cookie", "sessioncookie=testsession"),
+                 (":path", "/"),
+                 (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str()),
+                 ("x-forwarded-proto", "http")]
+        );
+
         if let Ok(Action::Allow( headers )) = action {
             assert!(headers.contains_key(AUTHORIZATION));
             assert_eq!(headers.get(AUTHORIZATION).unwrap().to_str().unwrap(), "bearer myaccesstoken");
