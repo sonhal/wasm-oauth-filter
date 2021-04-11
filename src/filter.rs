@@ -61,7 +61,9 @@ pub struct FilterConfig {
     auth_uri: String,
     token_uri: String,
     client_id: String,
-    client_secret: String
+    client_secret: String,
+    #[serde(default = "default_extra_params")]
+    extra_params: Vec<(String, String)>
 }
 
 
@@ -125,7 +127,7 @@ impl OAuthFilter {
                 let mut request_headers: Vec<(&str, &str)> = serialize_headers(&request.headers);
 
                 let token_url: Url = self.config.token_uri.parse().unwrap();
-                let authority = token_url.origin().unicode_serialization();
+                let authority = token_url.domain().unwrap().to_ascii_lowercase(); // TODO fix so it works in test and prod
                 let path = token_url.path();
                 request_headers.append(&mut vec![
                     (":method", "POST"),
@@ -137,7 +139,7 @@ impl OAuthFilter {
                     request_headers,
                     Some(request.body.as_slice()),
                     vec![],
-                    Duration::from_secs(5))?;
+                    Duration::from_secs(15))?;
                 Ok(Action::Pause)
             },
             oauth_client::Action::Allow(additional_headers) => {
@@ -239,6 +241,7 @@ impl Context for OAuthFilter {
                     }
                 },
                 Err(e) => {
+                    log::debug!("Error response from token endpoint={:?}", String::from_utf8(body));
                     self.send_error(
                         500,
                         ErrorBody::new("500".to_string(), format!("Invalid token response:  {:?}", e), None)
@@ -314,6 +317,10 @@ fn default_oidc_cookie_name() -> String {
 
 fn default_target_header_name() -> String {
     "Authorization".to_owned()
+}
+
+fn default_extra_params() -> Vec<(String, String)> {
+    Vec::new()
 }
 
 fn serialize_headers(headers: &HeaderMap) -> Vec<(&str, &str)> {

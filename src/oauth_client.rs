@@ -73,7 +73,8 @@ struct ServiceConfig {
     authorization_url: url::Url,
     token_url: url::Url,
     client_id: ClientId,
-    client_secret: ClientSecret
+    client_secret: ClientSecret,
+    extra_params: Vec<(String, String)>
 }
 
 
@@ -137,14 +138,20 @@ impl OAuthClient {
         let verifier = util::new_random_verifier(32);
         let pkce_challenge=
             PkceCodeChallenge::from_code_verifier_sha256(&verifier);
-
-        let (auth_url, csrf_token) = self.client
+        let mut builder = self.client
             .authorize_url(|| CsrfToken::new(util::new_random_verifier(32).secret().to_string()))
             // Set the desired scopes.
             .add_scope(Scope::new("openid".to_string()))
             // Set the PKCE code challenge.
-            .set_pkce_challenge(pkce_challenge)
-            .url();
+            .set_pkce_challenge(pkce_challenge);
+
+        // Add extra parameters for Authorization redirect from configuration
+        for param in &self.config.extra_params {
+            builder = builder.add_extra_param(param.0.as_str(), param.1.as_str());
+        }
+
+
+        let (auth_url, csrf_token) = builder.url();
 
         let closure_state = csrf_token.secret().clone();
         let closure_verifier = PkceCodeVerifier::new(verifier.secret().clone());
@@ -324,6 +331,7 @@ impl ServiceConfig {
                 .expect("Error parsing FilterConfig token_uri when creating OAutherConfig"),
             client_id: ClientId::new(config.client_id),
             client_secret: ClientSecret::new(config.client_secret),
+            extra_params: config.extra_params
         }
     }
 }
@@ -355,7 +363,8 @@ mod tests {
             auth_uri: "http://authorization".to_string(),
             token_uri: "http://token".to_string(),
             client_id: "myclient".to_string(),
-            client_secret: "mysecret".to_string()
+            client_secret: "mysecret".to_string(),
+            extra_params: Vec::new()
         }
     }
 
