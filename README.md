@@ -3,15 +3,15 @@
 An [Envoy](https://www.envoyproxy.io/) proxy extension that handles end-user authentication using 
 [OpenID Connect(OIDC)](https://openid.net/connect/). Only Authorization code flow is supported.
 
-### Extension overview
+## Extension overview
 The extension is written in Rust and the compile target is `wasm32-wasi`. The filter is written against the [WebAssembly for Proxies (ABI specification)
 ](https://github.com/proxy-wasm/spec). Tested with envoy:v1.17. 
 
 
-### Usage
+## Usage
 
-#### Configuration
-The filter can be configured through. Note that some of the fields are optional with default values.
+### Configuration
+The filter can be configured through. Note that some fields are optional with default values.
 
 | Field  | Type | Default | Description |
 | ------------- | ------------- | --- | --- |
@@ -24,4 +24,10 @@ The filter can be configured through. Note that some of the fields are optional 
 | client_secret  | String  | **Required** | OAuth 2.0 / OIDC client secret |
 | extra_params | list[[String, String]]  | [] | Extra query parameters the filter will add to the authorization redirect to the authorization server. |
 
+### Upstream Request Headers
+*Upstream* application will receive request with tokens in the following request headers.
 
+| Header  | Token | Description |
+| ------------- | ------------- | --- |
+| Authorization | Access token | The access token from the successful authoriziation flow will be added by the filter to request in the Authorization header. The token will be added as a `bearer` token |
+| X-Forwarded-ID-Token | id token | The ID token, if returned from the authorization server, will be added as a value to the `X-Forwarded-ID-Token` header |
