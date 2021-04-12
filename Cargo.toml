@@ -21,6 +21,7 @@ base64 = "0.13.0"
 cookie = "0.15.0"
 cfg-if = "1.0.0"
 getrandom = "0.2"
+time = "0.2.26"
 
 [package.metadata]
 wasm-opt = false

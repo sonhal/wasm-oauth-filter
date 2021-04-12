@@ -23,9 +23,10 @@ services:
       - 8080:8080
     environment:
       PORT: 8080
-      ISSUER_NAME: customiss
+      ISSUER_NAME: http://mock-oauth2-server:8080/customiss
       OIDC_DISCOVERY_URL: http://mock-oauth2-server:8080/customiss/.well-known/openid-configuration
       OIDC_ACCEPTED_AUDIENCE: aud-token-tester
+      JWKS_URI: http://mock-oauth2-server:8080/customiss/jwks
     restart: always
     depends_on:
       - mock-oauth2-server

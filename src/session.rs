@@ -1,10 +1,10 @@
-use std::time::{SystemTime, Duration, SystemTimeError};
+use std::time::{SystemTime, SystemTimeError};
 use serde::{Serialize, Deserialize};
 use oauth2::http::{HeaderMap, HeaderValue};
 use oauth2::http::header::{AUTHORIZATION, SET_COOKIE};
-use cookie::{CookieBuilder};
+use cookie::{CookieBuilder, Expiration};
 use crate::util;
-
+use time::{OffsetDateTime, Duration, NumericalDuration};
 
 pub trait SessionCache {
     fn get(&self, id: &String) -> Option<Session>;
@@ -29,7 +29,7 @@ impl Session {
         Session { id, data: SessionType::Empty }
     }
 
-    pub fn tokens(id: String, access_token: String, expires_in: Option<Duration>, id_token: Option<String>, refresh_token: Option<String>) -> Session{
+    pub fn tokens(id: String, access_token: String, expires_in: Option<std::time::Duration>, id_token: Option<String>, refresh_token: Option<String>) -> Session{
         Session {
             id,
             data: SessionType::Tokens(AuthorizationTokens {
@@ -90,7 +90,7 @@ impl Session {
     }
 
 
-    pub fn token_response(&self, access_token: String, expires_in: Option<Duration>, id_token: Option<String>, refresh_token: Option<String>) -> SessionUpdate {
+    pub fn token_response(&self, access_token: String, expires_in: Option<std::time::Duration>, id_token: Option<String>, refresh_token: Option<String>) -> SessionUpdate {
         SessionUpdate { id: self.id.clone(), data: UpdateType::Tokens(AuthorizationTokens {
             created_at: SystemTime::now(),
             access_token,
@@ -99,13 +99,31 @@ impl Session {
             refresh_token
         }) }
     }
-}
+
+    pub fn clear_cookie_header(&self, name: &String) -> HeaderMap {
+        let mut headers = HeaderMap::new();
+        let cookie = CookieBuilder::new(
+            name, "")
+            .secure(true)
+            .http_only(true)
+            .max_age(0.hours())
+            .finish().to_string();
+        headers.insert(SET_COOKIE, cookie.parse().unwrap());
+        headers
+    }
+
+    pub fn end_session(&self) -> SessionUpdate {
+        SessionUpdate { id: self.id.clone(), data: UpdateType::Ended }
+    }
+
+ }
 
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum UpdateType {
     AuthorizationRequest(AuthorizationResponseVerifiers),
-    Tokens(AuthorizationTokens)
+    Tokens(AuthorizationTokens),
+    Ended
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -126,18 +144,19 @@ impl SessionUpdate {
         }
     }
 
-    pub fn set_cookie_header(&self, name: &String) -> HeaderMap {
+    pub fn set_cookie_header(&self, name: &String, expires: Duration) -> HeaderMap {
         let mut headers = HeaderMap::new();
-        headers.insert(SET_COOKIE, self.cookie(name).parse().unwrap());
+        headers.insert(SET_COOKIE, self.cookie(name, expires).parse().unwrap());
         headers
     }
 
-    pub fn cookie(&self, name: &String) -> String {
+    pub fn cookie(&self, name: &String, expires: Duration) -> String {
         CookieBuilder::new(
             name,
             &self.id)
             .secure(true)
             .http_only(true)
+            .max_age(expires)
             .finish().to_string()
     }
 
@@ -147,6 +166,7 @@ impl SessionUpdate {
                 Session::from_verifier(self.id.clone(), verifiers.clone()),
             UpdateType::Tokens(tokens) =>
                 Session::from_tokens(self.id.clone(), tokens.clone()),
+            _ => Session::empty(self.id.clone())
         }
     }
 }
@@ -173,7 +193,7 @@ impl AuthorizationResponseVerifiers {
 pub struct AuthorizationTokens {
     created_at: SystemTime,
     access_token: String,
-    expires_in: Option<Duration>,
+    expires_in: Option<std::time::Duration>,
     id_token: Option<String>,
     refresh_token: Option<String>
 }
@@ -182,7 +202,7 @@ impl AuthorizationTokens {
     pub fn new(
         created_at: SystemTime,
         access_token: String,
-        expires_in: Option<Duration>,
+        expires_in: Option<std::time::Duration>,
         id_token: Option<String>,
         refresh_token: Option<String>) -> AuthorizationTokens {
         AuthorizationTokens {
@@ -242,6 +262,7 @@ mod tests {
                         Some(Session::from_verifier(id.clone(), verifiers.clone())),
                     UpdateType::Tokens(tokens) =>
                         Some(Session::from_tokens(id.clone(), tokens.clone())),
+                    UpdateType::Ended => None,
                 }
             }
         }
