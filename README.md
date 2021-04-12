@@ -25,7 +25,9 @@ The filter can be configured through. Note that some fields are optional with de
 | extra_params | list[[String, String]]  | [] | Extra query parameters the filter will add to the authorization redirect to the authorization server. |
 
 ### Upstream Request Headers
-*Upstream* application will receive request with tokens in the following request headers.
+The filter will add the received tokens from the authorization server to request headers. *Upstream* application will 
+receive request with tokens in the following request headers. **NOTE:** Upstream applications are responsible for 
+validation of the received tokens.
 
 | Header  | Token | Description |
 | ------------- | ------------- | --- |
