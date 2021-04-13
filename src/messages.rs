@@ -1,7 +1,27 @@
 use serde::{Serialize, Deserialize};
 use std::time::Duration;
 
+type Headers = Vec<(String, String)>;
 
+// Struct for sending responses directly back to the end-user from the filter
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DownStreamResponse {
+    headers: Headers,
+    status: u64,
+    body: String,
+}
+
+impl DownStreamResponse {
+    pub fn new(headers: Headers, status: u64, body: String) -> Self {
+        DownStreamResponse { headers, status, body }
+    }
+
+    pub fn serialize(&self) -> (Headers, u64, String) {
+        (self.headers.clone(), self.status, self.body.clone())
+    }
+}
+
+// Response from authorization server token endpoint
 #[derive(Debug, Serialize, Deserialize)]
 #[serde(untagged)]
 pub enum TokenResponse {
