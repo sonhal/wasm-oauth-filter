@@ -191,7 +191,6 @@ impl OAuthClient {
             params.push(("code_verifier", verifier_string.as_str()))
         }
 
-
         util::token_request(
             &AuthType::RequestBody,
             &(self.config.client_id),
@@ -281,7 +280,10 @@ impl State for ActiveSession {
             SessionType::AuthorizationRequest(verifiers) => {
                 let code = oauth.request_auth_code(headers);
                 match code {
-                    None => Response::NewState( Box::new(NoValidSession {})),
+                    None => {
+                        log::warn!("Waiting for authorization response but received request without authorization code");
+                        Response::NewState( Box::new(NoValidSession {}))
+                    }
                     Some(code) => {
                         let request = oauth.create_token_request(code, verifiers.code_verifiers());
                         Response::NewAction(ServiceAction::TokenRequest(request))
@@ -292,7 +294,7 @@ impl State for ActiveSession {
                 match tokens.is_access_token_valid() {
                     Ok(is_valid) => {
                         match is_valid {
-                            true => Response::NewAction(ServiceAction::Allow(tokens.bearer())),
+                            true => Response::NewAction(ServiceAction::Allow(tokens.allow_headers())),
                             false => {
                                 // TODO use refresh token if valid
                                 Response::NewState(Box::new(NoValidSession {}))
@@ -344,7 +346,7 @@ impl ServiceConfig {
             client_secret: ClientSecret::new(config.client_secret),
             extra_params: config.extra_params,
             sign_out_path: "/sign_out".to_string(),
-            cookie_expire: 1.hours(),
+            cookie_expire: Duration::seconds(config.cookie_expire as i64)
         }
     }
 }
@@ -378,7 +380,8 @@ mod tests {
             token_uri: "http://token".to_string(),
             client_id: "myclient".to_string(),
             client_secret: "mysecret".to_string(),
-            extra_params: Vec::new()
+            extra_params: Vec::new(),
+            cookie_expire: 120,
         }
     }
 

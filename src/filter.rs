@@ -62,6 +62,8 @@ pub struct FilterConfig {
     token_uri: String,
     client_id: String,
     client_secret: String,
+    #[serde(default = "default_cookie_expire")]
+    cookie_expire: u64, // in seconds
     #[serde(default = "default_extra_params")]
     extra_params: Vec<(String, String)>
 }
@@ -322,6 +324,8 @@ fn default_target_header_name() -> String {
 fn default_extra_params() -> Vec<(String, String)> {
     Vec::new()
 }
+
+fn default_cookie_expire() -> u64 { 3600 }
 
 fn serialize_headers(headers: &HeaderMap) -> Vec<(&str, &str)> {
     headers.iter()

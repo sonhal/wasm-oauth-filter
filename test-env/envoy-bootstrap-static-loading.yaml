@@ -45,7 +45,8 @@ static_resources:
                               "token_uri": "http://mock-oauth2-server:8888/customiss/token",
                               "auth_uri": "http://localhost:8888/customiss/authorize",
                               "client_id": "mycoolclientid",
-                              "client_secret": "mycoolclientsecret"
+                              "client_secret": "mycoolclientsecret",
+                              "cookie_expire": 120
                             }
                         vm_config:
                           runtime: "envoy.wasm.runtime.v8"
