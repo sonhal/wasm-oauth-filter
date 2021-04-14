@@ -4,8 +4,8 @@ pub mod mock_overrides;
 mod cache;
 mod session;
 mod messages;
-mod oauth_clientV2;
-mod oaut_client_types;
+mod oauth_client_v2;
+mod oauth_client_types;
 
 
 use proxy_wasm::types::LogLevel;
@@ -16,15 +16,16 @@ use serde::{Deserialize};
 use url;
 use oauth2::basic::{BasicTokenType};
 use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
-use oauth2::url::ParseError;
-use url::Url;
+use url::{Url, ParseError};
 use crate::oauth_client::{OAuthClient};
 use crate::cache::{SharedCache};
 use oauth2::http::HeaderMap;
 use std::cell::RefCell;
-use crate::session::{SessionCache};
+use crate::session::{SessionCache, SessionUpdate};
 use std::ops::Deref;
-use crate::messages::{ErrorBody};
+use crate::messages::{ErrorBody, DownStreamResponse, TokenResponse};
+use crate::oauth_client_v2::{CALLBACK_PATH, START_PATH, SIGN_OUT_PATH};
+use crate::oauth_client_types::{TokenRequest, ClientError, Redirect, Access, Request};
 
 
 #[cfg(not(test))]
@@ -46,6 +47,7 @@ struct OAuthRootContext {
 struct OAuthFilter {
     config: FilterConfig,
     oauth_client: OAuthClient,
+    client_v2: crate::oauth_client_v2::OAuthClient,
     cache: RefCell<SharedCache>,
 }
 
@@ -79,9 +81,11 @@ impl OAuthFilter {
         let cache = RefCell::new(cache);
 
         let oauther = OAuthClient::new(config.clone())?;
+        let client_v2 = crate::oauth_client_v2::OAuthClient::new(config.clone())?;
         Ok(OAuthFilter {
             config,
             oauth_client: oauther,
+            client_v2,
             cache
         })
     }
@@ -91,6 +95,16 @@ impl OAuthFilter {
         log_err(body.as_str());
         self.send_http_response(
             code,
+            vec![("Content-Type", "application/json")],
+            Some(body.as_bytes())
+        );
+    }
+
+    fn send_error_response(&self, response: DownStreamResponse) {
+        let body = serde_json::to_string_pretty(&response).unwrap();
+        log_err(body.as_str());
+        self.send_http_response(
+            response.code(),
             vec![("Content-Type", "application/json")],
             Some(body.as_bytes())
         );
@@ -109,6 +123,18 @@ impl OAuthFilter {
     fn respond_with_redirect(&self, url: Url, headers: HeaderMap) {
         let mut headers: Vec<(&str, &str)> =
             headers.iter().map( |(name, value)| { (name.as_str(), value.to_str().unwrap()) }).collect();
+        headers.append(&mut vec![("location", url.as_str())]);
+
+        self.send_http_response(
+            302,
+            headers,
+            None
+        );
+    }
+
+    fn _respond_with_redirect(&self, url: Url, headers: Vec<(String, String)>) {
+        let mut headers: Vec<(&str, &str)> =
+            headers.iter().map( |(name, value)| { (name.as_str(), value.as_str()) }).collect();
         headers.append(&mut vec![("location", url.as_str())]);
 
         self.send_http_response(
@@ -168,7 +194,56 @@ impl OAuthFilter {
             self.cache.borrow().deref()
         )
     }
+
+    fn _session(&self, headers: &Vec<(String, String)>) -> Option<crate::session::Session> {
+        crate::session::Session::_from_headers(
+            self.config.cookie_name.clone(),
+            headers,
+            self.cache.borrow().deref()
+        )
+    }
+
+    // Handle how the client should be called depending on the request path
+    fn endpoint(&self, request: crate::oauth_client_types::Request, session: Option<crate::session::Session>) -> Result<FilterAction, ClientError> {
+        let mut cache = self.cache.borrow_mut();
+        if request.url().path().starts_with(CALLBACK_PATH) {
+            let token_request = self.client_v2.callback(request, session)?;
+            Ok(FilterAction::TokenRequest(token_request))
+        }
+        else if request.url().path().starts_with(START_PATH) {
+            let (redirect, update) = self.client_v2.start(request)?;
+            cache.set(update);
+            cache.store(self).unwrap(); // TODO handle errors
+            Ok(FilterAction::Redirect(redirect))
+        } else if request.url().path().starts_with(SIGN_OUT_PATH) {
+            let (response, update) = self.client_v2.sign_out(session)?;
+            cache.set(update);
+            cache.store(self).unwrap(); // TODO handle errors
+            Ok(FilterAction::Response(response))
+        } else {
+            match self.client_v2.proxy(session)? {
+                Access::Denied(response) => Ok(FilterAction::Response(response)),
+                Access::Allowed(headers) => Ok(FilterAction::Allow(headers)),
+                Access::UnAuthenticated => {
+                    // Clean up
+                    let (redirect, update) = self.client_v2.start(request)?;
+                    cache.set(update);
+                    cache.store(self).unwrap(); // TODO handle errors
+                    Ok(FilterAction::Redirect(redirect))
+                }
+            }
+        }
+    }
 }
+
+// Represent actions the filter carries out during OAuth
+enum FilterAction {
+    TokenRequest(TokenRequest),
+    Redirect(Redirect),
+    Response(DownStreamResponse),
+    Allow(Vec<(String, String)>)
+}
+
 
 // Implement http functions related to this request.
 // This is the core of the filter code.
@@ -177,22 +252,44 @@ impl HttpContext for OAuthFilter {
     // This callback will be invoked when request headers arrive
     fn on_http_request_headers(&mut self, _: usize) -> Action {
         let headers = self.get_http_request_headers();
-        let headers: Vec<(&str, &str)>
-            = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
-        let user_session = self.session(&headers);
+        let user_session = self._session(&headers);
 
-        match self.oauth_client.handle_request(user_session, headers) {
-            Ok(oauther_action) => {
-                match self.oauth_action_handler(oauther_action) {
-                    Ok(filter_action) => filter_action,
-                    Err(status) => {
-                        self.send_bad_request(format!("Error occurred when handling action, status={:?}", status));
+        let request = Request::new(headers);
+        let request = if let Err(error) = request {
+            self.send_error_response(error.response());
+            return Action::Pause;
+        } else { request.unwrap() };
+
+        match self.endpoint(request, user_session) {
+            Ok(filter_action) => {
+                match filter_action {
+                    FilterAction::TokenRequest(request) => {
+                        self.dispatch_http_call(
+                            &self.config.auth_cluster,
+                            request.headers(),
+                            Some(request.body()),
+                            vec![],
+                            Duration::from_secs(20));
                         Action::Pause
+                    }
+                    FilterAction::Redirect(redirect) => {
+                        self._respond_with_redirect(redirect.url().clone(), redirect.headers().clone());
+                        Action::Pause
+                    }
+                    FilterAction::Response(response) => {
+                        self.send_error_response(response);
+                        Action::Pause
+                    }
+                    FilterAction::Allow(token_headers) => {
+                        for header in token_headers {
+                            self.add_http_request_header(header.0.as_str(), header.1.as_str());
+                        }
+                        Action::Continue
                     }
                 }
             }
-            Err(status) => {
-                self.send_bad_request(format!("Error occurred handling request headers, status = {:?}", status));
+            Err(error) => {
+                self.send_error_response(error.response());
                 Action::Pause
             }
         }
@@ -218,28 +315,17 @@ impl Context for OAuthFilter {
                         crate::messages::TokenResponse::Success(response) => {
                             log::debug!("access token found");
 
-                            // TODO clean this up
                             let headers = self.get_http_request_headers();
-                            let headers: Vec<(&str, &str)>
-                                = headers.iter().map( |(name, value)|{ (name.as_str(), value.as_str()) }).collect();
+                            let user_session = self._session(&headers);
 
-
-                            let user_session = self.session(&headers);
-                            let action = self.oauth_client.handle_token_call_response(user_session, &response);
-                            match action {
-                                Ok(action) => {
-                                    // TODO maybe bad to just ignore return here?
-                                    match self.oauth_action_handler(action) {
-                                        Ok(_) => {} // TODO maybe seperate handling for token responses?
-                                        Err( status) => self.send_error(
-                                            500,
-                                            ErrorBody::new("500".to_string(), format!("ERROR when handling action, status{:?}", status), None))
-                                    }
-                                },
-                                Err(error) => self.send_error(
-                                    500,
-                                    ErrorBody::new("500".to_string(), format!("Invalid token response:  {:?}", error), None)
-                                )
+                            match self.client_v2.token_response(TokenResponse::Success(response), user_session) {
+                                Ok((redirect, update)) => {
+                                    let mut cache = self.cache.borrow_mut();
+                                    cache.set(update);
+                                    cache.store(self).unwrap(); // TODO handle errors
+                                    self._respond_with_redirect(redirect.url().clone(), redirect.headers().clone())
+                                }
+                                Err(error) => self.send_error_response(error.response())
                             }
                         }
                     }

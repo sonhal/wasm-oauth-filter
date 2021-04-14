@@ -63,6 +63,19 @@ impl Session {
         }
     }
 
+    pub fn _from_headers(cookie_name: String, headers: &Vec<(String, String)>, cache: &dyn SessionCache) -> Option<Session> {
+        let session = Session::_parse_cookie(&cookie_name, &headers);
+        match session {
+            None => None,
+            Some(id) => {
+                match cache.get(&id) {
+                    None => Some(Session::empty(id)),
+                    Some(session) => Some(session)
+                }
+            }
+        }
+    }
+
     pub(crate) fn from_verifier(id: String, verifiers: AuthorizationResponseVerifiers) -> Session {
         Session {id, data: SessionType::AuthorizationRequest(verifiers) }
     }
@@ -72,6 +85,25 @@ impl Session {
 
     fn parse_cookie(id: &String, headers: &Vec<(&str, &str)>) -> Option<String> {
         let cookies: Option<&(&str, &str)> =
+            headers.iter().find( |(name, _ )| { *name == "cookie" } );
+        return match cookies {
+            Some(cookies) => {
+                let cookies: Vec<&str> = cookies.1.split(";").collect();
+                for cookie_string in cookies {
+                    let cookie_name_end = cookie_string.find('=').unwrap_or(0);
+                    let cookie_name = &cookie_string[0..cookie_name_end];
+                    if cookie_name.trim() == id {
+                        return Some(cookie_string[(cookie_name_end + 1)..cookie_string.len()].to_string().to_owned());
+                    }
+                }
+                None
+            },
+            None => None
+        }
+    }
+
+    fn _parse_cookie(id: &String, headers: &Vec<(String, String)>) -> Option<String> {
+        let cookies: Option<&(String, String)> =
             headers.iter().find( |(name, _ )| { *name == "cookie" } );
         return match cookies {
             Some(cookies) => {

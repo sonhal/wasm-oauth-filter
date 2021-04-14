@@ -38,7 +38,6 @@ impl Request {
         None
     }
 
-
     fn request_url(headers: Headers) -> Result<Url, ClientError> {
         let path =
             headers.iter().find(|(name, _)| { *name == ":path" }).map(|entry| { entry.1.clone() });
@@ -76,6 +75,10 @@ impl Redirect {
 
     pub fn url(&self) -> &Url {
         &self.url
+    }
+
+    pub fn headers(&self) -> &Headers {
+        &self.headers
     }
 }
 
@@ -118,7 +121,7 @@ impl TokenRequest {
 
 #[derive(Debug)]
 pub enum Access {
-    Denied(String),
+    Denied(DownStreamResponse),
     Allowed(Headers),
     UnAuthenticated,
 }

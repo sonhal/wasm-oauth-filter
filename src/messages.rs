@@ -6,7 +6,9 @@ type Headers = Vec<(String, String)>;
 // Struct for sending responses directly back to the end-user from the filter
 #[derive(Debug, Serialize, Deserialize)]
 pub struct DownStreamResponse {
+    #[serde(skip_serializing)]
     headers: Headers,
+
     status: u64,
     body: String,
 }
@@ -14,6 +16,10 @@ pub struct DownStreamResponse {
 impl DownStreamResponse {
     pub fn new(headers: Headers, status: u64, body: String) -> Self {
         DownStreamResponse { headers, status, body }
+    }
+
+    pub fn code(&self) -> u32 {
+        self.status as u32
     }
 
     pub fn serialize(&self) -> (Headers, u64, String) {

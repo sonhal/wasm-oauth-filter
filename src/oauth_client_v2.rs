@@ -1,18 +1,24 @@
 use std::any::Any;
-use std::string::ParseError;
 
 use oauth2::{AuthType, AuthUrl, ClientId, ClientSecret, CsrfToken, HttpRequest, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenUrl};
 use oauth2::basic::BasicClient;
 use oauth2::http::HeaderMap;
 use time::Duration;
-use url::Url;
+use url::{Url, ParseError};
 
 use crate::{FilterConfig, util};
 use crate::messages::{DownStreamResponse, TokenResponse};
-use crate::oaut_client_types::{Access, ClientError, Headers, Redirect, Request, TokenRequest};
+use crate::oauth_client_types::{Access, ClientError, Headers, Redirect, Request, TokenRequest};
 use crate::session::{Session, SessionType, SessionUpdate};
 
-struct OAuthClient {
+
+pub static CALLBACK_PATH: &str = "/callback";
+pub static START_PATH: &str  = "/auth";
+pub static SIGN_OUT_PATH: &str = "/sign_out";
+pub static CLIENT_PATHS: (&str, &str, &str) = (CALLBACK_PATH, START_PATH, SIGN_OUT_PATH);
+
+
+pub(crate) struct OAuthClient {
     config: ServiceConfig,
     client: BasicClient,
 }
@@ -144,14 +150,14 @@ impl OAuthClient {
                                     true => Ok(Access::Allowed(tokens.upstream_headers_tuple())),
                                     false => {
                                         // TODO use refresh token if valid
-                                        Ok(Access::Denied("Tokens expired".to_string()))
+                                        Ok(Access::Denied(DownStreamResponse::new(vec![], 403, "Tokens expired".to_string())))
                                     }
                                 }
                             }
                             Err(err) => Err(ClientError::new(500, format!("Error occurred while getting system time, error={}", err), None)),
                         }
                     }
-                    _ => Ok(Access::Denied("UnAuthorized session".to_string()))
+                    _ => Ok(Access::Denied(DownStreamResponse::new(vec![], 403, "UnAuthorized session".to_string())))
                 }
             }
         }
@@ -204,7 +210,10 @@ impl OAuthClient {
 
     fn valid_url(&self, url: &Url) -> Url {
         let mut url = url.clone();
-        if url.path().starts_with("/callback") || url.path().starts_with("/auth") || url.path().starts_with("/sign_out") {
+        if url.path().starts_with(CALLBACK_PATH) ||
+            url.path().starts_with(START_PATH) ||
+            url.path().starts_with(SIGN_OUT_PATH)
+        {
             url.set_path("/");
             return url
         }
