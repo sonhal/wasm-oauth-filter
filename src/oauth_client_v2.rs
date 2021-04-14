@@ -281,8 +281,8 @@ mod tests {
         }
     }
 
-    fn test_client() -> crate::oauth_clientV2::OAuthClient {
-        crate::oauth_clientV2::OAuthClient::new(test_config()).unwrap()
+    fn test_client() -> crate::oauth_client_v2::OAuthClient {
+        crate::oauth_client_v2::OAuthClient::new(test_config()).unwrap()
     }
 
     fn test_valid_session() -> (String, Session) {
@@ -359,7 +359,7 @@ mod tests {
 
     #[test]
     fn new() {
-        let client = crate::oauth_clientV2::OAuthClient::new(test_config());
+        let client = crate::oauth_client_v2::OAuthClient::new(test_config());
         assert!(client.is_ok())
     }
 

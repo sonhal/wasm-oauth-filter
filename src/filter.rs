@@ -331,10 +331,11 @@ impl Context for OAuthFilter {
                     }
                 },
                 Err(e) => {
-                    log::debug!("Error response from token endpoint={:?}", String::from_utf8(body));
+                    let error_message = String::from_utf8(body);
+                    log::debug!("Error response from token endpoint={:?}", error_message);
                     self.send_error(
                         500,
-                        ErrorBody::new("500".to_string(), format!("Invalid token response:  {:?}", e), None)
+                        ErrorBody::new("500".to_string(), format!("Invalid token response:  {:?}", error_message), None)
                     );
                 }
             };
