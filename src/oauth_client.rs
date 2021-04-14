@@ -294,7 +294,7 @@ impl State for ActiveSession {
                 match tokens.is_access_token_valid() {
                     Ok(is_valid) => {
                         match is_valid {
-                            true => Response::NewAction(ServiceAction::Allow(tokens.allow_headers())),
+                            true => Response::NewAction(ServiceAction::Allow(tokens.upstream_headers())),
                             false => {
                                 // TODO use refresh token if valid
                                 Response::NewState(Box::new(NoValidSession {}))

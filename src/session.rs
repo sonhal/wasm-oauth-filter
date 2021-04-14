@@ -201,6 +201,10 @@ impl AuthorizationResponseVerifiers {
     pub fn code_verifiers(&self) -> Option<String> {
         self.pcke_verifier.clone()
     }
+
+    pub fn validate_state(&self, state: String) -> bool {
+        self.state.csrf_token == state
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -228,13 +232,25 @@ impl AuthorizationTokens {
         }
     }
 
-    pub fn allow_headers(&self) -> HeaderMap {
+    pub fn upstream_headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(
             AUTHORIZATION,
             HeaderValue::from_str(format!("bearer {}",self.access_token).as_str()).unwrap());
         self.id_token.as_ref().and_then( |id_token| {
             headers.insert("X-Forwarded-ID-Token", HeaderValue::from_str(id_token.as_str()).unwrap())
+        });
+        headers
+    }
+
+    pub fn upstream_headers_tuple(&self) -> Vec<(String, String)> {
+        let mut headers = Vec::new();
+        headers.push((
+            AUTHORIZATION.to_string(),
+            format!("bearer {}",self.access_token)));
+        self.id_token.as_ref().and_then( |id_token| {
+            headers.push(("X-Forwarded-ID-Token".to_string(), id_token.clone()));
+            Some(id_token)
         });
         headers
     }
