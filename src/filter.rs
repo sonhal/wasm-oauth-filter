@@ -5,6 +5,7 @@ mod cache;
 mod session;
 mod messages;
 mod oauth_clientV2;
+mod oaut_client_types;
 
 
 use proxy_wasm::types::LogLevel;
