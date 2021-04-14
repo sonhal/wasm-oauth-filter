@@ -102,10 +102,14 @@ impl OAuthFilter {
 
     fn send_error_response(&self, response: DownStreamResponse) {
         let body = serde_json::to_string_pretty(&response).unwrap();
+        let mut headers = response.headers();
+        headers.push(("Content-Type", "application/json"));
+
         log_err(body.as_str());
+
         self.send_http_response(
             response.code(),
-            vec![("Content-Type", "application/json")],
+            headers,
             Some(body.as_bytes())
         );
     }

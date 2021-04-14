@@ -22,6 +22,12 @@ impl DownStreamResponse {
         self.status as u32
     }
 
+    pub fn headers(&self) -> Vec<(&str, &str)> {
+        self.headers.iter().map( |(name, value)| {
+            (name.as_str(), value.as_str())
+        }).collect()
+    }
+
     pub fn serialize(&self) -> (Headers, u64, String) {
         (self.headers.clone(), self.status, self.body.clone())
     }
