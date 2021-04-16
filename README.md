@@ -9,7 +9,7 @@ The extension is written in Rust and the compile target is `wasm32-wasi`. The fi
 
 
 ## Extension Paths
-The extension will handle these paths differently and applications should not use the same paths.
+The extension will handle request to these paths differently and applications should not use the same paths.
 
 | Path | Description |
 | ------------- | --- |
