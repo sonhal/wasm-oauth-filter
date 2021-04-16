@@ -8,6 +8,16 @@ The extension is written in Rust and the compile target is `wasm32-wasi`. The fi
 ](https://github.com/proxy-wasm/spec). Tested with envoy:v1.17. 
 
 
+## Extension Paths
+The extension will handle these paths differently and applications should not use the same paths.
+
+| Path | Description |
+| ------------- | --- |
+| /callback  |  path on the proxy the authorization server redirects the end-user back to after authentication. |
+| /start  | Starts a OpenID Connect Authorization flow |
+| /sign_out  | Clears the session with the extension, does not clear the session with the IdP |
+
+
 ## Usage
 
 ### Configuration
