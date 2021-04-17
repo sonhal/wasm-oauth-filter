@@ -124,18 +124,6 @@ impl OAuthFilter {
         );
     }
 
-    fn respond_with_redirect(&self, url: Url, headers: HeaderMap) {
-        let mut headers: Vec<(&str, &str)> =
-            headers.iter().map( |(name, value)| { (name.as_str(), value.to_str().unwrap()) }).collect();
-        headers.append(&mut vec![("location", url.as_str())]);
-
-        self.send_http_response(
-            302,
-            headers,
-            None
-        );
-    }
-
     fn _respond_with_redirect(&self, url: Url, headers: Vec<(String, String)>) {
         let mut headers: Vec<(&str, &str)> =
             headers.iter().map( |(name, value)| { (name.as_str(), value.as_str()) }).collect();
@@ -146,57 +134,6 @@ impl OAuthFilter {
             headers,
             None
         );
-    }
-
-    fn oauth_action_handler(&self, action: oauth_client::Action) -> Result<Action, Status> {
-        let mut cache = self.cache.borrow_mut();
-        match action {
-            oauth_client::Action::Redirect(url, headers, update) => {
-                cache.set(update);
-                cache.store(self).unwrap();
-                self.respond_with_redirect(url, headers);
-                Ok(Action::Pause)
-            }
-            oauth_client::Action::TokenRequest(request) => {
-                let mut request_headers: Vec<(&str, &str)> = serialize_headers(&request.headers);
-
-                let token_url: Url = self.config.token_uri.parse().unwrap();
-                let authority = token_url.domain().unwrap().to_ascii_lowercase(); // TODO fix so it works in test and prod
-                let path = token_url.path();
-                request_headers.append(&mut vec![
-                    (":method", "POST"),
-                    (":path", path),
-                    (":authority", authority.as_str())]);
-
-                self.dispatch_http_call(
-                    &self.config.auth_cluster,
-                    request_headers,
-                    Some(request.body.as_slice()),
-                    vec![],
-                    Duration::from_secs(15))?;
-                Ok(Action::Pause)
-            },
-            oauth_client::Action::Allow(additional_headers) => {
-
-                // TODO simplify and clean this this up
-                let old_headers: Vec<(String, String)> = self.get_http_request_headers();
-                let additional_headers: Vec<(&str, &str)> = serialize_headers(&additional_headers);
-                let new_headers: Vec<(String, String)> = merge_old_and_new(old_headers, additional_headers);
-                let headers = serialize_string_headers(&new_headers);
-
-                log_info(format!("Resuming call with headers={:?}", headers).as_str());
-                self.set_http_request_headers(headers);
-                Ok(Action::Continue)
-            }
-        }
-    }
-
-    fn session(&self, headers: &Vec<(&str, &str)>) -> Option<crate::session::Session> {
-        crate::session::Session::from_headers(
-            self.config.cookie_name.clone(),
-            headers.clone(),
-            self.cache.borrow().deref()
-        )
     }
 
     fn _session(&self, headers: &Vec<(String, String)>) -> Option<crate::session::Session> {
@@ -419,29 +356,6 @@ fn default_extra_params() -> Vec<(String, String)> {
 }
 
 fn default_cookie_expire() -> u64 { 3600 }
-
-fn serialize_headers(headers: &HeaderMap) -> Vec<(&str, &str)> {
-    headers.iter()
-        .map(
-            |( name, value)|
-                { (name.as_str(), value.to_str().unwrap()) }
-        ).collect()
-}
-
-fn serialize_string_headers(headers: &Vec<(String, String)>) -> Vec<(&str, &str)> {
-    headers.iter()
-        .map(
-            |( name, value)|
-                { (name.as_str(), value.as_str()) }
-        ).collect()
-}
-
-fn merge_old_and_new(old: Vec<(String, String)>, new: Vec<(&str, &str)>) -> Vec<(String, String)> {
-    let new: Vec<(String, String)> = new.iter().map(| (name, value) | { (name.to_string(), value.to_string())}).collect();
-    let merged: Vec<(String, String)> =
-        old.iter().chain(new.iter()).map( | (name, value) | { (name.to_string(),  value.to_string())}).collect();
-    merged
-}
 
 fn log_debug(message: &str) {
     host_log(LogLevel::Debug, message);

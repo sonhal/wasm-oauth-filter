@@ -66,7 +66,7 @@ impl OAuthClient {
     pub fn sign_out(&self, session: Option<Session>) -> Result<(DownStreamResponse, SessionUpdate), ClientError> {
         match session {
             None => {
-                Err(ClientError::new(200, "No session to sign out from".to_string(), None))
+                Err(ClientError::new(400, "No session to sign out from".to_string(), None))
             }
             Some(session) => {
                 let header = session.clear_cookie_header_tuple(&self.config.cookie_name);
@@ -77,9 +77,9 @@ impl OAuthClient {
 
     // Starts a new Authentication Code flow. Note that it does not invalidate any already active sessions in the cache
     pub fn start(&self, request: Request) -> Result<(Redirect, SessionUpdate), ClientError> {
-        let (redirect_url, state, verfier) = self.authorization_server_redirect();
+        let (redirect_url, state, verifier) = self.authorization_server_redirect();
 
-        let update = SessionUpdate::auth_request(self.valid_url(request.url()).to_string(), state, verfier);
+        let update = SessionUpdate::auth_request(self.valid_url(request.url()).to_string(), state, verifier);
         let header = update.set_cookie_header_tuple(&self.config.cookie_name, self.config.cookie_expire);
         Ok((Redirect::new(redirect_url, vec![header]), update))
     }
