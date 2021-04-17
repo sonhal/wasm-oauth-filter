@@ -77,7 +77,7 @@ impl OAuthFilter {
 
     fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
         log::debug!("Creating new HttpContext");
-        log::debug!("Cache state={:?}", cache).as_str();
+        log::debug!("Cache state={:?}", cache);
         let cache = RefCell::new(cache);
 
         let oauther = OAuthClient::new(config.clone())?;
