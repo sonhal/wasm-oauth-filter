@@ -1,4 +1,5 @@
 # OpenID Connect WASM Filter
+![Workflow badge](https://github.com/sonhal/wasm-oauth-filter/actions/workflows/build-deploy.yml/badge.svg)
 
 An [Envoy](https://www.envoyproxy.io/) proxy extension that handles end-user authentication using 
 [OpenID Connect(OIDC)](https://openid.net/connect/). Only Authorization code flow is supported.
