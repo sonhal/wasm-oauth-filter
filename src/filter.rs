@@ -76,8 +76,8 @@ pub struct FilterConfig {
 impl OAuthFilter {
 
     fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
-        log_debug("Creating new HttpContext");
-        log_info(format!("Cache state={:?}", cache).as_str());
+        log::debug!("Creating new HttpContext");
+        log::debug!("Cache state={:?}", cache).as_str();
         let cache = RefCell::new(cache);
 
         let oauther = OAuthClient::new(config.clone())?;
@@ -100,6 +100,7 @@ impl OAuthFilter {
         );
     }
 
+
     fn send_error_response(&self, response: DownStreamResponse) {
         let body = serde_json::to_string_pretty(&response).unwrap();
         let mut headers = response.headers();
@@ -114,17 +115,8 @@ impl OAuthFilter {
         );
     }
 
-    fn send_bad_request(&self, message: String) {
-        log_err(message.as_str());
-        self.send_error(400,
-                        crate::messages::ErrorBody::new(
-                            "400".to_string(),
-                            message,
-                            None)
-        );
-    }
-
-    fn _respond_with_redirect(&self, url: Url, headers: Vec<(String, String)>) {
+    // Send redirect response to end-user
+    fn respond_with_redirect(&self, url: Url, headers: Vec<(String, String)>) {
         let mut headers: Vec<(&str, &str)> =
             headers.iter().map( |(name, value)| { (name.as_str(), value.as_str()) }).collect();
         headers.append(&mut vec![("location", url.as_str())]);
@@ -136,7 +128,8 @@ impl OAuthFilter {
         );
     }
 
-    fn _session(&self, headers: &Vec<(String, String)>) -> Option<crate::session::Session> {
+    // Parse session cookie from request headers
+    fn session(&self, headers: &Vec<(String, String)>) -> Option<crate::session::Session> {
         crate::session::Session::_from_headers(
             self.config.cookie_name.clone(),
             headers,
@@ -193,7 +186,7 @@ impl HttpContext for OAuthFilter {
     // This callback will be invoked when request headers arrive
     fn on_http_request_headers(&mut self, _: usize) -> Action {
         let headers = self.get_http_request_headers();
-        let user_session = self._session(&headers);
+        let user_session = self.session(&headers);
 
         let request = Request::new(headers);
         let request = if let Err(error) = request {
@@ -214,7 +207,7 @@ impl HttpContext for OAuthFilter {
                         Action::Pause
                     }
                     FilterAction::Redirect(redirect) => {
-                        self._respond_with_redirect(redirect.url().clone(), redirect.headers().clone());
+                        self.respond_with_redirect(redirect.url().clone(), redirect.headers().clone());
                         Action::Pause
                     }
                     FilterAction::Response(response) => {
@@ -257,21 +250,21 @@ impl Context for OAuthFilter {
                             log::debug!("access token found");
 
                             let headers = self.get_http_request_headers();
-                            let user_session = self._session(&headers);
+                            let user_session = self.session(&headers);
 
                             match self.client_v2.token_response(TokenResponse::Success(response), user_session) {
                                 Ok((redirect, update)) => {
                                     let mut cache = self.cache.borrow_mut();
                                     cache.set(update);
                                     cache.store(self).unwrap(); // TODO handle errors
-                                    self._respond_with_redirect(redirect.url().clone(), redirect.headers().clone())
+                                    self.respond_with_redirect(redirect.url().clone(), redirect.headers().clone())
                                 }
                                 Err(error) => self.send_error_response(error.response())
                             }
                         }
                     }
                 },
-                Err(e) => {
+                Err(_) => {
                     let error_message = String::from_utf8(body);
                     log::debug!("Error response from token endpoint={:?}", error_message);
                     self.send_error(
