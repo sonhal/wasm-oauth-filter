@@ -1,70 +1,26 @@
-use crate::{FilterConfig, util};
-use oauth2::{ClientSecret, ClientId, TokenUrl, PkceCodeChallenge, AuthUrl, RedirectUrl, CsrfToken, Scope, PkceCodeVerifier, HttpRequest, AuthType, StandardTokenResponse, EmptyExtraTokenFields, TokenResponse};
-use url;
-use crate::oauth_client::Response::{NewAction, NewState};
+use std::any::Any;
+
+use oauth2::{AuthType, AuthUrl, ClientId, ClientSecret, CsrfToken, HttpRequest, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenUrl};
+use oauth2::basic::BasicClient;
+use oauth2::http::HeaderMap;
+use time::Duration;
 use url::{Url, ParseError};
-use oauth2::basic::{BasicClient, BasicTokenType};
-use oauth2::http::{HeaderMap};
-use std::fmt::Debug;
-use crate::session::{Session, SessionUpdate, SessionType};
-use crate::messages::SuccessfulResponse;
-use std::time::{SystemTimeError};
-use time::{Duration, NumericalDuration};
+
+use crate::{FilterConfig, util};
+use crate::messages::{DownStreamResponse, TokenResponse};
+use crate::oauth_client_types::{Access, ClientError, Headers, Redirect, Request, TokenRequest};
+use crate::session::{Session, SessionType, SessionUpdate};
 
 
-// OAuth 2.0 and OpenID Connect service
-// Note that most of the names for structs, functions and methods are borrowed from OAuth 2.0
-pub struct OAuthClient {
+pub static CALLBACK_PATH: &str = "/callback";
+pub static START_PATH: &str  = "/auth";
+pub static SIGN_OUT_PATH: &str = "/sign_out";
+pub static CLIENT_PATHS: (&str, &str, &str) = (CALLBACK_PATH, START_PATH, SIGN_OUT_PATH);
+
+
+pub(crate) struct OAuthClient {
     config: ServiceConfig,
-    state: Box<dyn State>,
     client: BasicClient,
-}
-
-#[derive(Debug)]
-pub enum Action {
-    Redirect(Url, HeaderMap, SessionUpdate),
-    TokenRequest(HttpRequest),
-    Allow(HeaderMap)
-}
-
-trait State: Debug {
-    fn handle_request(&self, session: &Option<Session>, oauth: &OAuthClient, header: &Vec<(&str, &str)>) -> Response;
-    fn handle_token_response(
-        &self, oauth: &OAuthClient,
-        session: &Option<Session>,
-        token_response: &SuccessfulResponse
-    ) -> Response {
-        log::warn!("received token response in state={:?}", self);
-        Response::NewState(Box::new(NoValidSession {} ))
-    }
-
-    fn debug_entering(&self, session: &Option<Session>, headers: &Vec<(&str, &str)>) {
-        log::debug!(
-                "Entering {:?} state with session={:?}, headers={:?}",
-                self,
-                session,
-                headers);
-    }
-}
-
-enum Response {
-    NewState(Box<dyn State>),
-    NewAction(ServiceAction),
-}
-
-enum ServiceAction {
-    Redirect(Url, HeaderMap, SessionUpdate),
-    TokenRequest(HttpRequest),
-    Allow(HeaderMap)
-}
-
-#[derive(Debug)]
-struct Start { }
-#[derive(Debug)]
-struct NoValidSession { }
-#[derive(Debug)]
-struct ActiveSession {
-    session: Session,
 }
 
 struct ServiceConfig {
@@ -79,8 +35,15 @@ struct ServiceConfig {
     cookie_expire: Duration,
 }
 
+#[derive(Debug)]
+pub enum Action {
+    Redirect(Url, Headers, SessionUpdate),
+
+    Allow(Headers)
+}
 
 impl OAuthClient {
+
     pub fn new(
         config: FilterConfig,
     ) -> Result<OAuthClient, ParseError> {
@@ -96,40 +59,105 @@ impl OAuthClient {
 
         Ok(OAuthClient {
             config: auther_config,
-            state: Box::new(Start {}),
             client,
         })
     }
 
-    pub fn handle_request(&mut self, session: Option<Session>, headers: Vec<(&str, &str)>) -> Result<Action, String> {
-        match self.state.handle_request(&session, self, &headers) {
-            Response::NewState(state) => {
-                self.state = state;
-                self.handle_request(session, headers)
+    pub fn sign_out(&self, session: Option<Session>) -> Result<(DownStreamResponse, SessionUpdate), ClientError> {
+        match session {
+            None => {
+                Err(ClientError::new(400, "No session to sign out from".to_string(), None))
             }
-            Response::NewAction(action) => match action {
-                ServiceAction::Redirect(url, headers, update) => {
-                    Ok(Action::Redirect(url, headers, update))
-                }
-                ServiceAction::Allow(headers) => {
-                    Ok(Action::Allow(headers))
-                },
-                ServiceAction::TokenRequest(request) =>
-                    Ok(Action::TokenRequest(request)),
+            Some(session) => {
+                let header = session.clear_cookie_header_tuple(&self.config.cookie_name);
+                Ok((DownStreamResponse::new(vec![header], 200, "Signed Out".to_string()), session.end_session()))
             }
         }
     }
 
-    pub fn handle_token_call_response(&mut self, session: Option<Session>, token_response: &SuccessfulResponse) -> Result<Action, String> {
-        match self.state.handle_token_response(self, &session, token_response) {
-            NewState(state) => Err(format!("ERROR, invalid state returned NewState={:?}", state)),
-            NewAction(action) => {
-                match action {
-                    ServiceAction::Redirect(url, headers, update) => {
-                        Ok(Action::Redirect(url, headers, update))
+    // Starts a new Authentication Code flow. Note that it does not invalidate any already active sessions in the cache
+    pub fn start(&self, request: Request) -> Result<(Redirect, SessionUpdate), ClientError> {
+        let (redirect_url, state, verifier) = self.authorization_server_redirect();
+
+        let update = SessionUpdate::auth_request(self.valid_url(request.url()).to_string(), state, verifier);
+        let header = update.set_cookie_header_tuple(&self.config.cookie_name, self.config.cookie_expire);
+        Ok((Redirect::new(redirect_url, vec![header]), update))
+    }
+
+    pub fn callback(&self, request: Request, session: Option<Session>) -> Result<TokenRequest, ClientError>{
+
+        let session = if let None = session {
+            return Err(ClientError::new(500, "No session for this request".to_string(), None));
+        } else {  session.unwrap() };
+
+        let verifiers = if let SessionType::AuthorizationRequest(verifiers) = session.data {
+            verifiers
+        } else { return Err(ClientError::new(500, "Session for authorization callback is not valid".to_string(), None))};
+
+        let code = request.authorization_code();
+        let state = request.state();
+        match (code, state) {
+            (Some(code), Some(state)) => {
+                verifiers.validate_state(state);
+                let request = self.create_token_request(code, verifiers.code_verifiers());
+                Ok(TokenRequest::new(request))
+            }
+            _ => {
+                log::warn!("Received request={:?} on callback endpoint without required parameters", request);
+                Err(ClientError::new(400,"Received request on callback endpoint without required parameters".to_string(), None))
+            }
+        }
+    }
+
+    pub fn token_response(&self, response: TokenResponse, session: Option<Session>) -> Result<(Redirect, SessionUpdate), ClientError>{
+        match response {
+            TokenResponse::Error(error) =>
+                Err(ClientError::new(500, format!("Token endpoint error={}", error.to_error_body().serialize()), None)),
+            TokenResponse::Success(response) => {
+                let access_token = response.access_token.clone();
+                let id_token = response.id_token.clone();
+                let expires_in = response.expires_in();
+                let refresh_token = response.id_token.clone();
+
+                let session = if let Some(session) = session {
+                    session
+                } else {
+                    return Err(ClientError::new(500, "Token response handling error, no session for the response".to_string(), None));
+                };
+
+                match &session.data {
+                    SessionType::AuthorizationRequest(verifiers) => {
+                        Ok((Redirect::new(
+                            verifiers.request_url().parse().unwrap(),
+                            vec![]),
+                         session.token_response(access_token, expires_in, id_token, refresh_token)))
                     }
-                    ServiceAction::TokenRequest(request) => Ok(Action::TokenRequest(request)),
-                    ServiceAction::Allow(headers) => Ok(Action::Allow(headers)),
+                    _ => Err(ClientError::new(500, format!("Token response handling error, session does not contain authorization request verifiers, session type={:?}", session.data.type_id()), None)),
+                }
+            }
+        }
+    }
+
+    pub fn proxy(&self, session: Option<Session>) -> Result<Access, ClientError>{
+        match session {
+            None => Ok(Access::UnAuthenticated),
+            Some(session) => {
+                match session.data {
+                    SessionType::Tokens(tokens) => {
+                        match tokens.is_access_token_valid() {
+                            Ok(is_valid) => {
+                                match is_valid {
+                                    true => Ok(Access::Allowed(tokens.upstream_headers_tuple())),
+                                    false => {
+                                        // TODO use refresh token if valid
+                                        Ok(Access::Denied(DownStreamResponse::new(vec![], 403, "Tokens expired".to_string())))
+                                    }
+                                }
+                            }
+                            Err(err) => Err(ClientError::new(500, format!("Error occurred while getting system time, error={}", err), None)),
+                        }
+                    }
+                    _ => Ok(Access::Denied(DownStreamResponse::new(vec![], 403, "UnAuthorized session".to_string())))
                 }
             }
         }
@@ -153,31 +181,9 @@ impl OAuthClient {
 
 
         let (auth_url, csrf_token) = builder.url();
+        let state = csrf_token.secret().clone();
 
-        let closure_state = csrf_token.secret().clone();
-        let closure_verifier = PkceCodeVerifier::new(verifier.secret().clone());
-
-        (auth_url, closure_state, closure_verifier.secret().to_string())
-    }
-
-    fn request_auth_code(&self, headers: &Vec<(&str, &str)>) -> Option<String> {
-        // TODO this could ben done easier, without needing authority, without lib support and fake scheme
-        let authority =
-            headers.iter().find(|(name, _)| { *name == ":authority" }).map(|entry| { entry.1 });
-        let path =
-            headers.iter().find(|(name, _)| { *name == ":path" }).map(|entry| { entry.1 });
-
-        let url = (authority, path);
-        if let (Some(authority), Some(path)) = url {
-            let params = url::Url::parse(format!("http://{}{}", authority, path).as_str()).unwrap();
-            for (k, v) in params.query_pairs() {
-                if k.to_string() == "code" {
-                    return Some(v.to_string())
-                }
-            }
-            return None
-        }
-        None
+        (auth_url, state, verifier.secret().to_string())
     }
 
     fn create_token_request(&self, code: String, code_verifier: Option<String>) -> HttpRequest {
@@ -202,131 +208,16 @@ impl OAuthClient {
         )
     }
 
-    fn request_url(&self, headers: &Vec<(&str, &str)>) -> Result<String, String> {
-        let path =
-            headers.iter().find(|(name, _)| { *name == ":path" }).map(|entry| { entry.1 });
-        let mut host_url = self.host_url(headers)?;
-        host_url.set_path(path.unwrap_or(""));
-        Ok(host_url.into_string())
-    }
-
-    fn host_url(&self, headers: &Vec<(&str, &str)>) -> Result<Url, String> {
-        let scheme =
-            headers.iter().find(|(name, _)| { *name == "x-forwarded-proto" }).map(|entry| { entry.1 });
-        let authority =
-            headers.iter().find(|(name, _)| { *name == ":authority" }).map(|entry| { entry.1 });
-        match (scheme, authority) {
-            (None, _) => Err("No scheme in request header".to_string()),
-            (_, None) => Err("No authority in request header".to_string()),
-            (Some(scheme), Some(authority)) => {
-                Ok(format!("{}://{}", scheme, authority).parse().unwrap())
-            }
+    fn valid_url(&self, url: &Url) -> Url {
+        let mut url = url.clone();
+        if url.path().starts_with(CALLBACK_PATH) ||
+            url.path().starts_with(START_PATH) ||
+            url.path().starts_with(SIGN_OUT_PATH)
+        {
+            url.set_path("/");
+            return url
         }
-    }
-
-    fn sign_out(&self, headers: &Vec<(&str, &str)>) -> bool{
-        let path =
-            headers.iter().find(|(name, _)| { *name == ":path" }).map(|entry| { entry.1 });
-        #[feature(option_result_contains)]
-        match path.and_then(|path| {
-            Some(path.contains(&self.config.sign_out_path))
-        }) {
-            None => false,
-            Some(boolean) => boolean
-        }
-    }
-}
-
-impl State for Start  {
-
-    fn handle_request(&self, session: &Option<Session>, _: &OAuthClient, header: &Vec<(&str, &str)>) -> Response {
-        self.debug_entering(&session, header);
-        // check cookie
-        match session {
-            Some( session ) => NewState(Box::new(ActiveSession { session: session.clone() })),
-            None => {
-                Response::NewState(Box::new(NoValidSession { }))
-            },
-        }
-    }
-}
-
-impl State for NoValidSession {
-    fn handle_request(&self, session: &Option<Session>, oauth: &OAuthClient, header: &Vec<(&str, &str)>) -> Response {
-        self.debug_entering(&session, header);
-
-
-        let (url, state, verifier) = oauth.authorization_server_redirect();
-        let request_url = oauth.request_url(header)
-            .expect("ERROR: No authority in request header");
-        let new_session = SessionUpdate::auth_request(request_url, state, verifier);
-        let headers = new_session.set_cookie_header(&oauth.config.cookie_name, oauth.config.cookie_expire);
-        NewAction(ServiceAction::Redirect(url, headers, new_session))
-    }
-}
-
-impl State for ActiveSession {
-    fn handle_request(&self, session: &Option<Session>, oauth: &OAuthClient, headers: &Vec<(&str, &str)>) -> Response {
-        self.debug_entering(&session, headers);
-        let session = session.as_ref().unwrap(); // session must be Some(session) for ActiveSession to be created
-
-        if oauth.sign_out(headers) {
-            return Response::NewAction(ServiceAction::Redirect(oauth.host_url(headers).unwrap(), session.clear_cookie_header(&oauth.config.cookie_name), session.end_session()));
-        }
-
-        match &session.data {
-            SessionType::Empty => Response::NewState( Box::new(NoValidSession {})),
-            SessionType::AuthorizationRequest(verifiers) => {
-                let code = oauth.request_auth_code(headers);
-                match code {
-                    None => {
-                        log::warn!("Waiting for authorization response but received request without authorization code");
-                        Response::NewState( Box::new(NoValidSession {}))
-                    }
-                    Some(code) => {
-                        let request = oauth.create_token_request(code, verifiers.code_verifiers());
-                        Response::NewAction(ServiceAction::TokenRequest(request))
-                    }
-                }
-            },
-            SessionType::Tokens(tokens) => {
-                match tokens.is_access_token_valid() {
-                    Ok(is_valid) => {
-                        match is_valid {
-                            true => Response::NewAction(ServiceAction::Allow(tokens.upstream_headers())),
-                            false => {
-                                // TODO use refresh token if valid
-                                Response::NewState(Box::new(NoValidSession {}))
-                            }
-                        }
-                    }
-                    Err(err) => {
-                        panic!("Error when getting system time: {}", err);
-                    }
-                }
-            }
-        }
-    }
-
-    fn handle_token_response(&self, _: &OAuthClient, _: &Option<Session>, token_response: &SuccessfulResponse) -> Response {
-        let access_token = token_response.access_token.clone();
-        let id_token = token_response.id_token.clone();
-        let expires_in = token_response.expires_in();
-        let refresh_token = token_response.id_token.clone();
-
-
-        match &self.session.data {
-            SessionType::AuthorizationRequest(verifiers) => {
-                Response::NewAction(ServiceAction::Redirect(
-                    verifiers.request_url().parse().unwrap(),
-                    HeaderMap::new(),
-                    self.session.token_response(access_token, expires_in, id_token, refresh_token),
-                ))
-            }
-            _ => unreachable!(),
-        }
-
-
+        url
     }
 }
 
@@ -353,30 +244,33 @@ impl ServiceConfig {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
+    use std::alloc::System;
     use std::any::Any;
-    use std::matches;
-    use crate::oauth_client::ServiceAction::Redirect;
     use std::borrow::Borrow;
     use std::collections::HashMap;
-    use oauth2::{AccessToken, StandardTokenResponse, EmptyExtraTokenFields};
-    use oauth2::http::header::{FORWARDED, SET_COOKIE, AUTHORIZATION};
-    use oauth2::basic::{BasicTokenResponse, BasicTokenType};
-    use crate::session::{AuthorizationTokens, AuthorizationResponseVerifiers};
-    use std::alloc::System;
-    use std::time::SystemTime;
     use std::io::stdin;
+    use std::matches;
+    use std::time::SystemTime;
 
+    use oauth2::{AccessToken, EmptyExtraTokenFields, StandardTokenResponse};
+    use oauth2::basic::{BasicTokenResponse, BasicTokenType};
+    use oauth2::http::header::{AUTHORIZATION, FORWARDED, SET_COOKIE};
+
+    use crate::FilterConfig;
+    use crate::messages::{SuccessfulResponse, TokenResponse};
+    use crate::session::{AuthorizationResponseVerifiers, AuthorizationTokens, Session, SessionType};
+
+    use super::*;
 
     fn test_config() -> FilterConfig {
         FilterConfig {
-            redirect_uri: "http://redirect".to_string(),
+            redirect_uri: "https://redirect".to_string(),
             target_header_name: "".to_string(),
             cookie_name: "sessioncookie".to_string(),
             auth_cluster: "some_cluster".to_string(),
             issuer: "".to_string(),
-            auth_uri: "http://authorization".to_string(),
-            token_uri: "http://token".to_string(),
+            auth_uri: "https://authorization".to_string(),
+            token_uri: "https://token".to_string(),
             client_id: "myclient".to_string(),
             client_secret: "mysecret".to_string(),
             extra_params: Vec::new(),
@@ -384,191 +278,158 @@ mod tests {
         }
     }
 
-    fn session_from_header(headers: HeaderMap, session_key: String) -> String {
-        let cookies = headers.get(SET_COOKIE).unwrap().to_str().unwrap().to_string();
-        let session: Option<String> = cookies.split(";")
-            .map(
-                | cookie |
-                    { (cookie.split("=").next(),cookie.split("=").skip(1).next()) }
-            ).find(
-            | (name, value)  | {
-                { name.unwrap() == session_key }
-            }).map( | (name, value)| { value.unwrap().to_string() });
-        session.unwrap()
+    fn test_client() -> crate::oauth_client::OAuthClient {
+        crate::oauth_client::OAuthClient::new(test_config()).unwrap()
     }
 
-    fn test_client() -> OAuthClient {
-        OAuthClient::new(
-            test_config(),
-        ).unwrap()
+    fn test_valid_session() -> (String, Session) {
+        ("testession".to_string(), Session::tokens(
+            "testession".to_string(),
+            "testaccesstoken".to_string(),
+            Some(std::time::Duration::from_secs(120)),
+            Some("testidtoken".to_string()),
+            None,
+        ))
     }
 
+    fn test_callback_session() -> (String, Session) {
+        ("testession".to_string(), Session::verifiers(
+            "testession".to_string(),
+            SystemTime::now(),
+            "http://localhost/path".to_string(),
+            "123".to_string(),
+            Some("abc".to_string()))
+        )
+    }
+
+    fn test_request() -> Request {
+        Request::new( vec![
+            ("random_header".to_string(), "value".to_string()),
+            ("x-forwarded-proto".to_string(), "http".to_string()),
+            (":authority".to_string(), "localhost".to_string()),
+            (":path".to_string(), "/test-path".to_string())
+        ]).unwrap()
+    }
+
+    fn test_callback_request() -> Request {
+        Request::new( vec![
+            ("random_header".to_string(), "value".to_string()),
+            ("x-forwarded-proto".to_string(), "http".to_string()),
+            (":authority".to_string(), "localhost".to_string()),
+            (":path".to_string(), "/callback?code=1234abcd&state=123".to_string())
+        ]).unwrap()
+    }
+
+    fn test_authorized_request() -> (Request, Session) {
+        (Request::new( vec![
+            ("random_header".to_string(), "value".to_string()),
+            ("x-forwarded-proto".to_string(), "http".to_string()),
+            (":authority".to_string(), "localhost".to_string()),
+            (":path".to_string(), "/resource".to_string())
+        ]).unwrap(),
+        Session::tokens(
+            "mysession".to_string(),
+            "testaccesstoken".to_string(),
+            Some(std::time::Duration::from_secs(120)),
+            Some("testidtoken".to_string()),
+            None,
+        ))
+    }
+
+    fn test_successful_token_response() -> TokenResponse {
+        TokenResponse::Success(SuccessfulResponse::new(
+            "testaccesstoken".to_string(),
+            Some("testidtoken".to_string()),
+            Some("bearer".to_string()),
+            None,
+            Some(120)))
+    }
+
+    fn contains_set_cookie_header(headers: Vec<(String, String)>)  -> bool {
+        for (key, val) in headers {
+            if key == SET_COOKIE.to_string() {
+                return true;
+            }
+        }
+        false
+    }
 
     #[test]
     fn new() {
-        let oauth= test_client();
-        assert_eq!(
-            oauth.config.authorization_url.as_str(),
-            "http://authorization/"
-        );
+        let client = crate::oauth_client::OAuthClient::new(test_config());
+        assert!(client.is_ok())
     }
 
     #[test]
-    fn auth_code_header() {
-        let oauth= test_client();
-        let authority = oauth.config.authorization_url.origin().unicode_serialization();
-        let test_headers = vec![
-            ("cookie", "sessioncookie=mysession"),
-            (":path", "auth/?code=awesomecode&state=state123"),
-            (":authority", authority.as_str())
-        ];
-        assert_eq!(oauth.request_auth_code(&test_headers).unwrap(), "awesomecode");
+    fn sign_out() {
+        let client = test_client();
+        let (_, session) = test_valid_session();
+
+        let result = client.sign_out(Some(session));
+        assert!(result.is_ok());
+        let (response, update) = result.unwrap();
+        assert!(contains_set_cookie_header(response.serialize().0))
     }
 
     #[test]
-    fn unauthorized_request() {
-        let mut oauth = test_client();
-
-        let action = oauth.handle_request(
-            None,
-            vec![
-                ("random_header", "value"),
-                ("x-forwarded-proto", "http"),
-                (":authority", "localhost")
-            ]
-        );
-
-        if let Ok(Action::Redirect(url, headers, update)) = action {
-            assert_eq!(url.origin().unicode_serialization().as_str(), "http://authorization");
-            assert!(headers.contains_key("set-cookie"));
-        } else { panic!("action was not redirect, action" ) }
+    fn start() {
+        let client = test_client();
+        let request = test_request();
+        let result = client.start(request);
+        assert!(result.is_ok());
+        let (redirect, update) = result.unwrap();
+        assert_eq!(redirect.url().origin(), client.config.authorization_url.origin());
+        // The session we are storing should be an AuthorizationRequest
+        assert!(matches!(update.create_session().data, SessionType::AuthorizationRequest(..)));
     }
 
     #[test]
-    fn session_cookie_present_but_no_token_in_cache_request() {
-        let mut oauth= test_client();
+    fn callback() {
+        let client = test_client();
+        let request = test_callback_request();
+        let (id, callback_session) = test_callback_session();
 
-        let session= Session::empty("sessionid".to_string());
+        let result = client.callback(request, Some(callback_session));
+        assert!(result.is_ok());
 
-        let action = oauth.handle_request(
-            Some(session),
-            vec![("cookie", "sessioncookie=sessionid"), ("x-forwarded-proto", "http"), (":authority", "localhost")]);
-        if let Ok(Action::Redirect(url, headers, update )) = action {
-            assert_eq!(url.origin().unicode_serialization().as_str(), "http://authorization");
-        } else {panic!("actions was not redirect")}
-    }
-
-    #[test]
-    fn session_cookie_present_and_valid_token_in_cache_request() {
-        let mut oauth= test_client();
-
-        let session = Session::tokens(
-            "mysession".to_string(),
-            "testtoken".to_string(),
-            Some(std::time::Duration::from_secs(120)),
-            None,
-            None,
-        );
-
-        let action = oauth.handle_request(
-            Some(session),
-            vec![
-                ("cookie", format!("{}=mysession", oauth.config.cookie_name).as_str()),
-                (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str()),
-                ("x-forwarded-proto", "http")
-            ]
-        );
-        if let Ok(Action::Allow( headers )) = action {
-            assert!(headers.contains_key(AUTHORIZATION))
-        } else {panic!("action should be to allow")}
-    }
-
-    #[test]
-    fn session_cookie_present_no_valid_token_in_cache_but_auth_code_in_query() {
-        let mut oauth= test_client();
-        let session = Session::verifiers(
-            "mysession".to_string(),
-            SystemTime::now(),
-            "http://localhost".to_string(),
-            "123".to_string(),
-            Some("abc".to_string()));
-
-        let action = oauth.handle_request(
-            Some(session),
-            vec![
-                ("cookie", "sessioncookie=mysession"),
-                (":path", "auth/?code=awesomecode&state=state123"),
-                (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str()),
-                ("x-forwarded-proto", "http")
-            ]);
-        if let Ok(Action::TokenRequest(http_request )) = action {
-            assert_eq!(http_request.url.as_str(), oauth.config.token_url.as_str())
-        } else {panic!("action should be to HttpCall")}
-    }
-
-    #[test]
-    fn handle_valid_token_call_response() {
-        let mut oauth= test_client();
-        let session_id = "testsession";
-        let protected_api = "http://proxy:8081/resource";
-        let session = Session::verifiers(
-            session_id.to_string(),
-            SystemTime::now(),
-            protected_api.to_string(),
-            "state123".to_string(),
-            Some("abc".to_string())
-        );
-
-        let action = oauth.handle_request(
-            Some(session.clone()),
-            vec![
-                ("cookie", format!("{}={}", oauth.config.cookie_name, session_id).as_str()),
-                (":path", "auth/?code=awesomecode&state=state123"),
-                (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str()),
-                ("x-forwarded-proto", "http")
-            ]);
-
-        assert!(matches!(&action, Ok(Action::TokenRequest(http_request))));
-
-        let token_call_response = SuccessfulResponse::new(
-            "myaccesstoken".to_string(),
-            None,
-            Some("bearer".to_string()),
-            None,
-            Some(3600)
-        );
-
-        let action = oauth.handle_token_call_response(Some(session), &token_call_response);
-        if let Ok(Action::Redirect( url, headers, update)) = action {
-            assert_eq!(url.to_string(), protected_api);
-        } else {panic!("action should be to HttpCall")}
+        let result = result.unwrap();
+        assert_eq!(result.clone().url().clone(), client.config.token_url);
+        // The body of the token request should contain the client id and secret
+        assert!(String::from_utf8(result.clone().body().to_vec()).unwrap().contains(&client.config.client_secret.secret().to_ascii_lowercase()));
+        assert!(String::from_utf8(result.clone().body().to_vec()).unwrap().contains(&client.config.client_id.to_ascii_lowercase()));
     }
 
 
     #[test]
-    fn valid_session() {
-        let mut oauth = test_client();
-
-        let session = Session::tokens(
-            "testsession".to_string(),
-            "myaccesstoken".to_string(),
-            Some(std::time::Duration::from_secs(120)),
-            None,
-            None
-        );
-
-        let action = oauth.handle_request(
-            Some(session),
-            vec![
-                 ("cookie", "sessioncookie=testsession"),
-                 (":path", "/"),
-                 (":authority", oauth.config.authorization_url.origin().unicode_serialization().as_str()),
-                 ("x-forwarded-proto", "http")]
-        );
-
-        if let Ok(Action::Allow( headers )) = action {
-            assert!(headers.contains_key(AUTHORIZATION));
-            assert_eq!(headers.get(AUTHORIZATION).unwrap().to_str().unwrap(), "bearer myaccesstoken");
-        } else {panic!("action={:?} should be to Allow", action)}
+    fn token_response() {
+        let client = test_client();
+        let response = test_successful_token_response();
+        let (id, callback_session) = test_callback_session();
+        let result = client.token_response(response, Some(callback_session));
+        assert!(result.is_ok());
     }
+
+    #[test]
+    fn proxy() {
+        let client = test_client();
+        let (request, session) = test_authorized_request();
+
+
+        // Authenticated and valid sessions are accepted
+        let result = client.proxy(Some(session));
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), Access::Allowed(..)));
+
+        // Empty (first request) session are unauthenticated
+        let result = client.proxy(None);
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), Access::UnAuthenticated));
+
+        // Sessions that are waiting for callback are denied
+        let result = client.proxy(Some(test_callback_session().1));
+        assert!(result.is_ok());
+        assert!(matches!(result.unwrap(), Access::Denied(..)));
+
+    }
+
 }

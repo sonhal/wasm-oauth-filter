@@ -1,10 +1,9 @@
 mod util;
-pub mod oauth_client;
 pub mod mock_overrides;
 mod cache;
 mod session;
 mod messages;
-mod oauth_client_v2;
+mod oauth_client;
 mod oauth_client_types;
 
 
@@ -17,14 +16,13 @@ use url;
 use oauth2::basic::{BasicTokenType};
 use oauth2::{StandardTokenResponse, AccessToken, EmptyExtraTokenFields};
 use url::{Url, ParseError};
-use crate::oauth_client::{OAuthClient};
 use crate::cache::{SharedCache};
 use oauth2::http::HeaderMap;
 use std::cell::RefCell;
 use crate::session::{SessionCache, SessionUpdate};
 use std::ops::Deref;
 use crate::messages::{ErrorBody, DownStreamResponse, TokenResponse};
-use crate::oauth_client_v2::{CALLBACK_PATH, START_PATH, SIGN_OUT_PATH};
+use crate::oauth_client::{CALLBACK_PATH, START_PATH, SIGN_OUT_PATH};
 use crate::oauth_client_types::{TokenRequest, ClientError, Redirect, Access, Request};
 
 
@@ -46,8 +44,7 @@ struct OAuthRootContext {
 
 struct OAuthFilter {
     config: FilterConfig,
-    oauth_client: OAuthClient,
-    client_v2: crate::oauth_client_v2::OAuthClient,
+    oauth_client: crate::oauth_client::OAuthClient,
     cache: RefCell<SharedCache>,
 }
 
@@ -80,12 +77,10 @@ impl OAuthFilter {
         log::debug!("Cache state={:?}", cache);
         let cache = RefCell::new(cache);
 
-        let oauther = OAuthClient::new(config.clone())?;
-        let client_v2 = crate::oauth_client_v2::OAuthClient::new(config.clone())?;
+        let oauth_client = crate::oauth_client::OAuthClient::new(config.clone())?;
         Ok(OAuthFilter {
             config,
-            oauth_client: oauther,
-            client_v2,
+            oauth_client,
             cache
         })
     }
@@ -140,26 +135,26 @@ impl OAuthFilter {
     fn endpoint(&self, request: crate::oauth_client_types::Request, session: Option<crate::session::Session>) -> Result<FilterAction, ClientError> {
         let mut cache = self.cache.borrow_mut();
         if request.url().path().starts_with(CALLBACK_PATH) {
-            let token_request = self.client_v2.callback(request, session)?;
+            let token_request = self.oauth_client.callback(request, session)?;
             Ok(FilterAction::TokenRequest(token_request))
         }
         else if request.url().path().starts_with(START_PATH) {
-            let (redirect, update) = self.client_v2.start(request)?;
+            let (redirect, update) = self.oauth_client.start(request)?;
             cache.set(update);
             cache.store(self).unwrap(); // TODO handle errors
             Ok(FilterAction::Redirect(redirect))
         } else if request.url().path().starts_with(SIGN_OUT_PATH) {
-            let (response, update) = self.client_v2.sign_out(session)?;
+            let (response, update) = self.oauth_client.sign_out(session)?;
             cache.set(update);
             cache.store(self).unwrap(); // TODO handle errors
             Ok(FilterAction::Response(response))
         } else {
-            match self.client_v2.proxy(session)? {
+            match self.oauth_client.proxy(session)? {
                 Access::Denied(response) => Ok(FilterAction::Response(response)),
                 Access::Allowed(headers) => Ok(FilterAction::Allow(headers)),
                 Access::UnAuthenticated => {
                     // Clean up
-                    let (redirect, update) = self.client_v2.start(request)?;
+                    let (redirect, update) = self.oauth_client.start(request)?;
                     cache.set(update);
                     cache.store(self).unwrap(); // TODO handle errors
                     Ok(FilterAction::Redirect(redirect))
@@ -251,7 +246,7 @@ impl Context for OAuthFilter {
                             let headers = self.get_http_request_headers();
                             let user_session = self.session(&headers);
 
-                            match self.client_v2.token_response(TokenResponse::Success(response), user_session) {
+                            match self.oauth_client.token_response(TokenResponse::Success(response), user_session) {
                                 Ok((redirect, update)) => {
                                     let mut cache = self.cache.borrow_mut();
                                     cache.set(update);
