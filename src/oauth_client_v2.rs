@@ -264,13 +264,13 @@ mod tests {
 
     fn test_config() -> FilterConfig {
         FilterConfig {
-            redirect_uri: "http://redirect".to_string(),
+            redirect_uri: "https://redirect".to_string(),
             target_header_name: "".to_string(),
             cookie_name: "sessioncookie".to_string(),
             auth_cluster: "some_cluster".to_string(),
             issuer: "".to_string(),
-            auth_uri: "http://authorization".to_string(),
-            token_uri: "http://token".to_string(),
+            auth_uri: "https://authorization".to_string(),
+            token_uri: "https://token".to_string(),
             client_id: "myclient".to_string(),
             client_secret: "mysecret".to_string(),
             extra_params: Vec::new(),

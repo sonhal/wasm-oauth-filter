@@ -86,7 +86,7 @@ mod tests {
         let mut test_context = TestContext { data: Vec::new() };
 
         let test_update = SessionUpdate::auth_request(
-            "http://proxy/resource".to_string(),
+            "https://proxy/resource".to_string(),
             "abc".to_string(),
             "123".to_string()
         );
