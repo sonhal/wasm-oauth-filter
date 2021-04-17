@@ -39,12 +39,11 @@ trait State: Debug {
     }
 
     fn debug_entering(&self, session: &Option<Session>, headers: &Vec<(&str, &str)>) {
-        crate::log_debug(
-            format!(
+        log::debug!(
                 "Entering {:?} state with session={:?}, headers={:?}",
                 self,
                 session,
-                headers).as_str());
+                headers);
     }
 }
 

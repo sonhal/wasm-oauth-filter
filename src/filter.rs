@@ -92,7 +92,7 @@ impl OAuthFilter {
 
     fn send_error(&self, code: u32, response: crate::messages::ErrorBody) {
         let body = serde_json::to_string_pretty(&response).unwrap();
-        log_err(body.as_str());
+        log::error!("{}", body);
         self.send_http_response(
             code,
             vec![("Content-Type", "application/json")],
@@ -105,8 +105,7 @@ impl OAuthFilter {
         let body = serde_json::to_string_pretty(&response).unwrap();
         let mut headers = response.headers();
         headers.push(("Content-Type", "application/json"));
-
-        log_err(body.as_str());
+        log::error!("{}", body);
 
         self.send_http_response(
             response.code(),
@@ -137,7 +136,7 @@ impl OAuthFilter {
         )
     }
 
-    // Handle how the client should be called depending on the request path
+    // Call the client by right method depending on the request path
     fn endpoint(&self, request: crate::oauth_client_types::Request, session: Option<crate::session::Session>) -> Result<FilterAction, ClientError> {
         let mut cache = self.cache.borrow_mut();
         if request.url().path().starts_with(CALLBACK_PATH) {
@@ -239,7 +238,7 @@ impl Context for OAuthFilter {
         body_size: usize,
         _num_trailers: usize,
     ) {
-        log_debug("Token response from auth server received");
+        log::debug!("Token response from auth server received");
         if let Some(body) = self.get_http_call_response_body(0, body_size) {
             match serde_json::from_slice::<crate::messages::TokenResponse>(body.as_slice()) {
                 Ok(response) => {
@@ -288,11 +287,11 @@ impl RootContext for OAuthRootContext {
     fn on_configure(&mut self, _plugin_configuration_size: usize) -> bool {
         if let Some(config_buffer) = self.get_configuration() {
             let oauth_filter_config: FilterConfig = serde_json::from_slice(config_buffer.as_slice()).unwrap();
-            log_info(format!("OAuth filter configured with: {:?}", oauth_filter_config).as_str());
+            log::info!("OAuth filter configured with: {:?}", oauth_filter_config);
             self.config = Some(oauth_filter_config);
             true
         } else {
-            log_err("No configuration supplied for OAuth filter");
+            log::error!("No configuration supplied for OAuth filter");
             false
         }
     }
@@ -300,18 +299,18 @@ impl RootContext for OAuthRootContext {
     fn create_http_context(&self, _context_id: u32) -> Option<Box<dyn HttpContext>> {
         match self.config.as_ref() {
             None => {
-                log_err("No configuration supplied, cannot create HttpContext");
+                log::error!("No configuration supplied, cannot create HttpContext");
                 None
             },
             Some(filter_config) => {
                 match SharedCache::from_host(self) {
                     Ok(cache) => {
-                        log_info("Stored cache returned from host");
+                        log::info!("Stored cache returned from host");
                         Some(Box::new(OAuthFilter::new(filter_config.clone(), cache).unwrap()))
                     }
                     Err(_) => {
                         // attempt to create shared
-                        log_info("Could not get shared cache from host, attempt to create new");
+                        log::info!("Could not get shared cache from host, attempt to create new");
                         let mut cache = SharedCache::new();
                         match cache.store(self) {
                             Ok(_) => {}
@@ -349,32 +348,3 @@ fn default_extra_params() -> Vec<(String, String)> {
 }
 
 fn default_cookie_expire() -> u64 { 3600 }
-
-fn log_debug(message: &str) {
-    host_log(LogLevel::Debug, message);
-}
-
-fn log_info(message: &str) {
-    host_log(LogLevel::Info, message)
-}
-
-fn log_warn(message: &str) {
-    host_log(LogLevel::Warn, message)
-}
-
-fn log_err(message: &str) {
-    host_log(LogLevel::Error, message)
-}
-
-fn host_log(level: LogLevel, message: &str) {
-    cfg_if::cfg_if! {
-            if #[cfg(all(target_arch = "wasm32", target_os = "wasi"))] {
-                    match proxy_wasm::hostcalls::log(level, message) {
-                        Ok(_) => {}
-                        Err(status) => panic!(format!("ERROR when attempting to log using `proxy_wasm::hostcalls::log` status returned from host: {:?} ", status))
-                    }
-            } else {
-                println!("{:?} {}", level, message);
-            }
-        }
-}
