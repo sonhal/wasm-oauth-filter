@@ -10,7 +10,7 @@ services:
       - 8090:10000
       - 19901:9901
   mock-oauth2-server:
-    image: mock-oauth2-server:0.3-SNAPSHOT
+    image: docker.pkg.github.com/navikt/mock-oauth2-server/mock-oauth2-server:0.3.2
     ports:
       - 8888:8080
     environment:

@@ -46,6 +46,7 @@ static_resources:
                               "auth_uri": "http://localhost:8888/customiss/authorize",
                               "client_id": "mycoolclientid",
                               "client_secret": "mycoolclientsecret",
+                              "scopes": ["openid", "email", "profile"],
                               "cookie_expire": 120
                             }
                         vm_config:
