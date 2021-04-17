@@ -25,14 +25,15 @@ The filter can be configured through. Note that some fields are optional with de
 
 | Field  | Type | Default | Description |
 | ------------- | ------------- | --- | --- |
-| redirect_uri  | String  | /callback | URL the authorization server redirects the end-user back to after authentication. |
-| cookie_name  | String  | oidcSession | Cookie name that holds the session cookie for the user. |
+| redirect_uri  | String  | /callback | URL the authorization server redirects the end-user back to after authentication |
+| cookie_name  | String  | oidcSession | Cookie name that holds the session cookie for the user |
+| scopes  | list[String]  | ["openid"] | Scopes the filter will request from the authorization server |
 | auth_cluster  | String  | auth_server_cluster | Envoy cluster that the filter will use to issue token request to the authorization server |
-| auth_url  | String  | **Required** | The URL that unauthenticated end-users will be redirected to |
+| auth_url  | String  | **Required** | The URL that unauthenticated end-users will be redirected to. |
 | token_url  | String  | **Required** | The URL that the filter will issue token requests against |
 | client_id  | String  | **Required** | OAuth 2.0 / OIDC client ID |
 | client_secret  | String  | **Required** | OAuth 2.0 / OIDC client secret |
-| extra_params | list[[String, String]]  | [] | Extra query parameters the filter will add to the authorization redirect to the authorization server. |
+| extra_params | list[[String, String]]  | [] | Extra query parameters the filter will add to the authorization redirect to the authorization server |
 
 ### Upstream Request Headers
 The filter will add the received tokens from the authorization server to request headers. *Upstream* application will 

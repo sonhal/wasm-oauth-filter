@@ -31,7 +31,7 @@ struct ServiceConfig {
     client_id: ClientId,
     client_secret: ClientSecret,
     extra_params: Vec<(String, String)>,
-    sign_out_path: String,
+    scopes: Vec<String>,
     cookie_expire: Duration,
 }
 
@@ -169,14 +169,17 @@ impl OAuthClient {
             PkceCodeChallenge::from_code_verifier_sha256(&verifier);
         let mut builder = self.client
             .authorize_url(|| CsrfToken::new(util::new_random_verifier(32).secret().to_string()))
-            // Set the desired scopes.
-            .add_scope(Scope::new("openid".to_string()))
             // Set the PKCE code challenge.
             .set_pkce_challenge(pkce_challenge);
 
         // Add extra parameters for Authorization redirect from configuration
         for param in &self.config.extra_params {
             builder = builder.add_extra_param(param.0.as_str(), param.1.as_str());
+        }
+
+        // Add configured scopes
+        for scope in &self.config.scopes {
+            builder = builder.add_scope(Scope::new(scope.clone()))
         }
 
 
@@ -235,7 +238,7 @@ impl ServiceConfig {
             client_id: ClientId::new(config.client_id),
             client_secret: ClientSecret::new(config.client_secret),
             extra_params: config.extra_params,
-            sign_out_path: "/sign_out".to_string(),
+            scopes: config.scopes.clone(),
             cookie_expire: Duration::seconds(config.cookie_expire as i64)
         }
     }
@@ -275,6 +278,7 @@ mod tests {
             client_secret: "mysecret".to_string(),
             extra_params: Vec::new(),
             cookie_expire: 120,
+            scopes: vec!["openid".to_string()]
         }
     }
 
@@ -430,6 +434,33 @@ mod tests {
         assert!(result.is_ok());
         assert!(matches!(result.unwrap(), Access::Denied(..)));
 
+    }
+
+    #[test]
+    fn configure_scopes() {
+
+        let scopes = vec!["openid".to_string(),
+                          "email".to_string(),
+                          "profile".to_string()];
+        let config = test_config();
+        let config = FilterConfig {
+            scopes: scopes.clone(),
+            ..config
+        };
+
+        let client = crate::oauth_client::OAuthClient::new(config).unwrap();
+        let request = test_request();
+
+
+        // Correct scopes should be in redirect to authorization server
+        let result = client.start(request);
+        assert!(result.is_ok());
+        let result = result.unwrap();
+        assert!(matches!(result, (Redirect {..}, _)));
+        for scope in scopes.iter() {
+            assert!(result.0.url().query().unwrap().contains(scope),
+                    "redirect did not contain scope={}", scope);
+        }
     }
 
 }

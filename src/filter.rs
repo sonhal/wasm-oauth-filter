@@ -63,6 +63,8 @@ pub struct FilterConfig {
     token_uri: String,
     client_id: String,
     client_secret: String,
+    #[serde(default = "default_scopes")]
+    scopes: Vec<String>,
     #[serde(default = "default_cookie_expire")]
     cookie_expire: u64, // in seconds
     #[serde(default = "default_extra_params")]
@@ -336,6 +338,10 @@ fn default_oidc_cookie_name() -> String {
 
 fn default_target_header_name() -> String {
     "Authorization".to_owned()
+}
+
+fn default_scopes() -> Vec<String> {
+    vec!["openid".to_string()]
 }
 
 fn default_extra_params() -> Vec<(String, String)> {
