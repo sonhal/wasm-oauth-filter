@@ -5,6 +5,7 @@ mod session;
 mod messages;
 mod oauth_client;
 mod oauth_client_types;
+mod discovery;
 
 
 use proxy_wasm::types::LogLevel;
