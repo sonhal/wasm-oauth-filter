@@ -22,9 +22,12 @@ use oauth2::http::HeaderMap;
 use std::cell::RefCell;
 use crate::session::{SessionCache, SessionUpdate};
 use std::ops::Deref;
-use crate::messages::{ErrorBody, DownStreamResponse, TokenResponse};
+use crate::messages::{ErrorBody, DownStreamResponse, TokenResponse, HttpRequest};
 use crate::oauth_client::{CALLBACK_PATH, START_PATH, SIGN_OUT_PATH};
 use crate::oauth_client_types::{TokenRequest, ClientError, Redirect, Access, Request};
+use url::form_urlencoded::parse;
+use crate::discovery::{ConfigError, JsonWebKeySet, ProviderMetadata};
+use std::collections::HashMap;
 
 
 #[cfg(not(test))]
@@ -34,13 +37,19 @@ pub fn _start() {
     proxy_wasm::set_root_context(
         |_| -> Box<dyn RootContext> {
             Box::new(OAuthRootContext {
-                config: None
+                config: None,
+                provider_metadata: None,
+                jwks: None,
+                request_active: false,
             })
         });
 }
 
 struct OAuthRootContext {
-    config: Option<FilterConfig>
+    config: Option<FilterConfig>,
+    provider_metadata: Option<ProviderMetadata>,
+    jwks: Option<JsonWebKeySet>,
+    request_active: bool,
 }
 
 struct OAuthFilter {
@@ -69,7 +78,8 @@ pub struct FilterConfig {
     #[serde(default = "default_cookie_expire")]
     cookie_expire: u64, // in seconds
     #[serde(default = "default_extra_params")]
-    extra_params: Vec<(String, String)>
+    extra_params: Vec<(String, String)>,
+    oidc_issuer_url: Option<String>
 }
 
 
@@ -279,7 +289,38 @@ impl Context for OAuthFilter {
     }
 }
 
-impl Context for OAuthRootContext {}
+impl Context for OAuthRootContext {
+
+    // Handle http discovery responses during configuration
+    fn on_http_call_response(
+        &mut self,
+        _token_id: u32,
+        _num_headers: usize,
+        body_size: usize,
+        _num_trailers: usize,
+    ) {
+        log::debug!("HTTP response");
+        let bytes = match self.get_http_call_response_body(0, body_size) {
+            None => {
+                log::error!("No response body");
+                panic!("Invalid HTTP response, no response body")
+            }
+            Some(bytes) => bytes,
+        };
+        if self.provider_metadata.is_none() {
+            self.parse_provider_metadata(bytes);
+            let request = discovery::jwks_request(self.provider_metadata.clone().unwrap().jwks_url());
+            match self.dispatch(request) {
+                Ok(_) => { log::debug!("successfully jwks request")}
+                Err(_) => { log::error!("Failed to jwks request")}
+            }
+        } else {
+            self.parse_jwks(bytes);
+            self.set_tick_period(Duration::from_secs(0)); // Turn of tick events
+        }
+    }
+}
+
 impl RootContext for OAuthRootContext {
 
     fn on_configure(&mut self, _plugin_configuration_size: usize) -> bool {
@@ -287,11 +328,26 @@ impl RootContext for OAuthRootContext {
             let oauth_filter_config: FilterConfig = serde_json::from_slice(config_buffer.as_slice()).unwrap();
             log::info!("OAuth filter configured with: {:?}", oauth_filter_config);
             self.config = Some(oauth_filter_config);
-            true
+
+            if self.config.clone().unwrap().oidc_issuer_url.is_some() {
+                self.set_tick_period(Duration::from_secs(2));
+                true
+            } else { true }
         } else {
             log::error!("No configuration supplied for OAuth filter");
             false
         }
+    }
+
+    fn on_tick(&mut self) {
+        log::debug!("RootContext tick, request active={}", self.request_active);
+        if !self.request_active {
+            match self.oidc_config() {
+                Ok(_) => { log::debug!("successfully dispatched discovery request")}
+                Err(_) => { log::error!("Failed to dispatch discovery request")}
+            }
+        }
+        self.request_active = true;
     }
 
     fn create_http_context(&self, _context_id: u32) -> Option<Box<dyn HttpContext>> {
@@ -325,6 +381,77 @@ impl RootContext for OAuthRootContext {
 
     fn get_type(&self) -> Option<ContextType> {
         Some(ContextType::HttpContext)
+    }
+}
+
+impl OAuthRootContext {
+    fn oidc_config(&self) -> Result<(), discovery::ConfigError> {
+
+        let config = if let Some(config) = &self.config {
+            config
+        } else { return Err(discovery::ConfigError::Parse("Filter config is None".to_string())); };
+
+        if config.oidc_issuer_url.is_none() {
+            return Err(discovery::ConfigError::Parse("OIDC issuer is not set".to_string()));
+        }
+        let oidc_url = config.oidc_issuer_url.clone().unwrap()
+            .parse::<Url>()
+            .map_err(|err| { discovery::ConfigError::Parse(err.to_string())})?;
+        let request = discovery::discovery_request(oidc_url)
+            .map_err(|err| { ConfigError::Parse(err.to_string())})?;
+
+        let result = self.dispatch(request);
+        if result.is_err() {
+            log::error!("ERROR when attempting http request to discovery endpoint, error={:?}", result);
+            return Err(ConfigError::Response(500, "Error".to_string())); // TODO FIX
+        }
+        Ok(())
+    }
+
+    // Send redirect response to end-user
+    fn dispatch(&self, request: HttpRequest) -> Result<u32, Status> {
+        log::debug!("HTTP request to cluster={}  request={:?}",&self.config.as_ref().unwrap().auth_cluster, request);
+        self.dispatch_http_call(
+            &self.config.as_ref().unwrap().auth_cluster,
+            request.headers(),
+            None,
+            vec![],
+            Duration::from_secs(5)
+        )
+    }
+
+    fn parse_provider_metadata(&mut self, bytes: Bytes) {
+        let provider_metadata = if let Ok(provider_metadata) =
+        serde_json::from_slice::<discovery::ProviderMetadata>(bytes.as_slice()) {
+            provider_metadata
+        } else {
+            log::error!("Invalid response body");
+            panic!("Invalid discovery response body")
+        };
+        if self.provider_metadata.is_some() {
+            log::error!("provider properties already set");
+            panic!("Invalid RootContext state, provider properties already set")
+        } else {
+            self.provider_metadata = Some(provider_metadata);
+            log::info!("Provider Metadata configured: {:?}", self.provider_metadata)
+        }
+    }
+
+    fn parse_jwks(&mut self, bytes: Bytes) {
+        let jwks = if let Ok(jwks) =
+        serde_json::from_slice::<discovery::JsonWebKeySet>(bytes.as_slice()) {
+            jwks
+        } else {
+            log::error!("Invalid response body");
+            panic!("Invalid JWKS response body")
+        };
+        if self.jwks.is_some() {
+            log::error!("JWKS already set");
+            panic!("Invalid RootContext state, JWKS set")
+        } else {
+            self.jwks = Some(jwks);
+            log::info!("JWKS configured: {:?}", self.jwks)
+        }
     }
 }
 

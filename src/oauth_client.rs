@@ -35,13 +35,6 @@ struct ServiceConfig {
     cookie_expire: Duration,
 }
 
-#[derive(Debug)]
-pub enum Action {
-    Redirect(Url, Headers, SessionUpdate),
-
-    Allow(Headers)
-}
-
 impl OAuthClient {
 
     pub fn new(
@@ -278,7 +271,8 @@ mod tests {
             client_secret: "mysecret".to_string(),
             extra_params: Vec::new(),
             cookie_expire: 120,
-            scopes: vec!["openid".to_string()]
+            scopes: vec!["openid".to_string()],
+            oidc_issuer_url: None
         }
     }
 

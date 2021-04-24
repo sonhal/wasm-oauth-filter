@@ -1,5 +1,7 @@
-use serde::{Serialize, Deserialize};
+use oauth2::http;
+use serde::{Deserialize, Serialize};
 use std::time::Duration;
+use url::Url;
 
 type Headers = Vec<(String, String)>;
 
@@ -15,7 +17,11 @@ pub struct DownStreamResponse {
 
 impl DownStreamResponse {
     pub fn new(headers: Headers, status: u64, body: String) -> Self {
-        DownStreamResponse { headers, status, body }
+        DownStreamResponse {
+            headers,
+            status,
+            body,
+        }
     }
 
     pub fn code(&self) -> u32 {
@@ -23,9 +29,10 @@ impl DownStreamResponse {
     }
 
     pub fn headers(&self) -> Vec<(&str, &str)> {
-        self.headers.iter().map( |(name, value)| {
-            (name.as_str(), value.as_str())
-        }).collect()
+        self.headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect()
     }
 
     pub fn serialize(&self) -> (Headers, u64, String) {
@@ -45,7 +52,7 @@ pub enum TokenResponse {
 pub struct ErrorResponse {
     error: String,
     error_description: String,
-    error_uri: Option<String>
+    error_uri: Option<String>,
 }
 
 impl ErrorResponse {
@@ -53,7 +60,7 @@ impl ErrorResponse {
         ErrorBody {
             status: "500".to_string(),
             error: self.error.clone(),
-            error_description: Some(self.error_description.clone())
+            error_description: Some(self.error_description.clone()),
         }
     }
 }
@@ -64,44 +71,49 @@ pub struct SuccessfulResponse {
     pub id_token: Option<String>,
     pub token_type: Option<String>,
     pub scope: Option<String>,
-    expires_in: Option<u64>
+    expires_in: Option<u64>,
 }
 
 impl SuccessfulResponse {
-
-    pub fn new(access_token: String,
-           id_token: Option<String>,
-           token_type: Option<String>,
-           scope: Option<String>,
-           expires_in: Option<u64>) -> SuccessfulResponse {
+    pub fn new(
+        access_token: String,
+        id_token: Option<String>,
+        token_type: Option<String>,
+        scope: Option<String>,
+        expires_in: Option<u64>,
+    ) -> SuccessfulResponse {
         SuccessfulResponse {
             access_token,
             id_token,
             token_type,
             scope,
-            expires_in
+            expires_in,
         }
     }
 
     pub fn expires_in(&self) -> Option<Duration> {
-        if self.expires_in.is_none() { return None }
+        if self.expires_in.is_none() {
+            return None;
+        }
         Some(Duration::from_secs(self.expires_in.unwrap()))
     }
-
 }
-
 
 #[derive(Serialize)]
 pub struct ErrorBody {
     status: String,
     error: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    error_description: Option<String>
+    error_description: Option<String>,
 }
 
 impl ErrorBody {
     pub fn new(status: String, error: String, description: Option<String>) -> ErrorBody {
-        ErrorBody {status, error, error_description: description}
+        ErrorBody {
+            status,
+            error,
+            error_description: description,
+        }
     }
 
     pub fn serialize(&self) -> String {
@@ -109,17 +121,84 @@ impl ErrorBody {
     }
 }
 
+#[derive(Clone, Debug)]
+pub struct HttpRequest {
+    // These are all owned values so that the request can safely be passed between
+    // threads.
+    /// URL to which the HTTP request is being made.
+    url: Url,
+    /// HTTP request headers to send.
+    headers: Vec<(String, String)>,
+    /// HTTP request body (typically for POST requests only).
+    body: Vec<u8>,
+}
+
+impl HttpRequest {
+    pub fn new(
+        url: Url,
+        method: http::method::Method,
+        headers: Headers,
+        body: Vec<u8>,
+    ) -> HttpRequest {
+        let mut headers = headers;
+        headers.push((":method".to_string(), method.to_string()));
+        headers.append(&mut vec![
+            (":path".to_string(), url.path().to_string()),
+            (
+                ":authority".to_string(),
+                url.host_str().unwrap().to_string(),
+            ),
+        ]);
+        HttpRequest { url, headers, body }
+    }
+
+    pub fn headers(&self) -> Vec<(&str, &str)> {
+        self.headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.as_str()))
+            .collect()
+    }
+
+    pub fn url(&self) -> &str {
+        self.url.as_str()
+    }
+
+    pub fn path(&self) -> &str {
+        self.url.path()
+    }
+
+    pub fn authority(&self) -> &str {
+        self.url.host_str().unwrap()
+    }
+
+    pub fn body(&self) -> &Vec<u8> {
+        &self.body
+    }
+}
+
+///
+/// An HTTP response.
+///
+#[derive(Clone, Debug)]
+pub struct HttpResponse {
+    /// HTTP status code returned by the server.
+    pub status_code: http::status::StatusCode,
+    /// HTTP response headers returned by the server.
+    pub headers: Headers,
+    /// HTTP response body returned by the server.
+    pub body: Vec<u8>,
+}
 
 #[cfg(test)]
 mod tests {
-    use crate::messages::{TokenResponse, ErrorResponse, SuccessfulResponse};
+    use crate::messages::{ErrorResponse, SuccessfulResponse, TokenResponse};
 
     #[test]
     fn error_response() {
-        let test_error = TokenResponse::Error( ErrorResponse{
+        let test_error = TokenResponse::Error(ErrorResponse {
             error: "500".to_string(),
             error_description: "Bad stuff happened".to_string(),
-            error_uri: None
+            error_uri: None,
         });
         let serialized = serde_json::to_string(&test_error).unwrap();
         let deserialized: TokenResponse = serde_json::from_str(&serialized).unwrap();
@@ -128,12 +207,12 @@ mod tests {
 
     #[test]
     fn successful_response() {
-        let test_success = TokenResponse::Success(SuccessfulResponse{
+        let test_success = TokenResponse::Success(SuccessfulResponse {
             access_token: "cooltoken".to_string(),
             id_token: None,
             token_type: None,
             scope: Some("openid email profile".to_string()),
-            expires_in: None
+            expires_in: None,
         });
         let serialized = serde_json::to_string(&test_success).unwrap();
         let deserialized: TokenResponse = serde_json::from_str(&serialized).unwrap();
@@ -156,5 +235,4 @@ mod tests {
         let deserialized: TokenResponse = serde_json::from_str(&serialized).unwrap();
         assert!(matches!(deserialized, TokenResponse::Success(..)));
     }
-
 }

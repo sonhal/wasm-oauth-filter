@@ -1,12 +1,12 @@
-use openidconnect::core::{CoreJsonWebKey, CoreJsonWebKeyType, CoreJsonWebKeyUse, CoreProviderMetadata, CoreJwsSigningAlgorithm};
-use openidconnect::http::header::ACCEPT;
-use openidconnect::http::{HeaderValue, Method, StatusCode};
-use openidconnect::{
-    DiscoveryError, HttpRequest, HttpResponse, IssuerUrl, JsonWebKeySet, JwsSigningAlgorithm,
-};
 use serde::{Deserialize, Serialize};
 use std::{error, fmt};
 use url::{ParseError, Url};
+use jwt_simple::prelude::RSAPublicKey;
+use jsonwebkey::JsonWebKey;
+use crate::messages::{HttpRequest, HttpResponse};
+use oauth2::http::{Method, StatusCode};
+use oauth2::http::header::ACCEPT;
+
 
 pub const MIME_TYPE_JSON: &str = "application/json";
 pub const MIME_TYPE_JWKS: &str = "application/jwk-set+json";
@@ -29,7 +29,7 @@ impl fmt::Display for ConfigError {
 
 impl error::Error for ConfigError {}
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 pub struct ProviderMetadata {
     issuer: Url,
     authorization_endpoint: Url,
@@ -45,28 +45,30 @@ pub struct ProviderMetadata {
     id_token_signing_alg_values_supported: Vec<String>,
 }
 
+impl ProviderMetadata {
+    pub fn jwks_url(&self) -> Url {
+        self.jwks_uri.clone()
+    }
+}
+
 pub fn discovery_request(issuer_url: Url) -> Result<HttpRequest, ParseError> {
     let discovery_url = issuer_url.join(CONFIG_URL_SUFFIX)?;
 
-    Ok(HttpRequest {
-        url: discovery_url,
-        method: Method::GET,
-        headers: vec![(ACCEPT, HeaderValue::from_static(MIME_TYPE_JSON))]
-            .into_iter()
-            .collect(),
-        body: Vec::new(),
-    })
+    Ok(HttpRequest::new(
+        discovery_url,
+        Method::GET,
+        vec![(ACCEPT.to_string(), MIME_TYPE_JSON.to_string())],
+        Vec::new(),
+    ))
 }
 
 pub fn jwks_request(jwks_url: Url) -> HttpRequest {
-    HttpRequest {
-        url: jwks_url,
-        method: Method::GET,
-        headers: vec![(ACCEPT, HeaderValue::from_static(MIME_TYPE_JSON))]
-            .into_iter()
-            .collect(),
-        body: vec![],
-    }
+    HttpRequest::new(
+        jwks_url,
+        Method::GET,
+        vec![(ACCEPT.to_string(), MIME_TYPE_JSON.to_string())],
+        vec![],
+    )
 }
 
 pub fn discovery_response(
@@ -94,22 +96,36 @@ pub fn discovery_response(
     }
 }
 
-type FilterJsonWebKeySet = JsonWebKeySet<
-    CoreJwsSigningAlgorithm,
-    CoreJsonWebKeyType,
-    CoreJsonWebKeyUse,
-    CoreJsonWebKey,
->;
 
-pub fn jwks_response(response: HttpResponse) -> Result<FilterJsonWebKeySet, ConfigError> {
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+pub struct JsonWebKeySet
+{
+    keys: Vec<JsonWebKey>,
+}
+
+#[derive(Debug, Deserialize, PartialEq, Serialize)]
+struct RSAJsonWebKeySet {
+    alg: String, // "RS256"
+    kty: String, // "RSA"
+    _use: String, // "sig"
+    n: String, // modulus
+    e: String, // exponent
+    kid: String, // "sttmy2a1FKl1AAzi7e1zW"
+    x5t: String, // "J6LAUO_mZE52KNapwehthok-r0w"
+    x5c: Vec<String> // X.509 cert chain
+}
+
+
+pub fn jwks_response(response: HttpResponse) -> Result<JsonWebKeySet, ConfigError> {
     if response.status_code != StatusCode::OK {
         return Err(ConfigError::Response(
             response.status_code.as_u16() as u32,
             "JWKS response error".to_string(),
         ));
     }
-    Ok(serde_json::from_slice::<FilterJsonWebKeySet>(&response.body)
-        .map_err(|_| {ConfigError::Parse("Failed to parse JWKS response body".to_string())})?)
+
+    serde_json::from_slice::<JsonWebKeySet>(&response.body)
+            .map_err(|err| { ConfigError::Parse(err.to_string())})
 
 }
 
@@ -117,13 +133,19 @@ pub fn jwks_response(response: HttpResponse) -> Result<FilterJsonWebKeySet, Conf
 mod tests {
     use crate::discovery;
     use crate::discovery::ConfigError;
-    use openidconnect::http::{HeaderMap, StatusCode};
-    use openidconnect::{HttpResponse, JsonWebKey};
+    use std::borrow::Cow;
+    use jsonwebkey::Key;
+    use jwt_simple::prelude::{RS384PublicKey, RSAPublicKey, NoCustomClaims};
+    use serde::Serialize;
+    use oauth2::url::form_urlencoded::ByteSerialize;
+    use crate::messages::HttpResponse;
+    use oauth2::http::StatusCode;
 
     #[test]
     fn discovery_request() {
-        let result = discovery::discovery_request("https://issuer".parse().unwrap());
-        assert!(result.is_ok())
+        let result = discovery::discovery_request("https://issuer/customissuer/".parse().unwrap());
+        assert!(result.is_ok());
+        assert!(result.unwrap().url().to_string().contains("customissuer"))
     }
 
     #[test]
@@ -142,7 +164,7 @@ mod tests {
         .into_bytes();
         let response = HttpResponse {
             status_code: StatusCode::OK,
-            headers: HeaderMap::new(),
+            headers: vec![],
             body,
         };
 
@@ -166,7 +188,7 @@ mod tests {
             }".to_string().into_bytes();
         let response = HttpResponse {
             status_code: StatusCode::OK,
-            headers: HeaderMap::new(),
+            headers: vec![],
             body,
         };
 
@@ -174,5 +196,21 @@ mod tests {
             response,
         );
         assert!(result.is_ok());
+        let key = result.unwrap().keys.pop().unwrap().key;
+        match *key {
+            Key::EC { .. } => {}
+            Key::RSA { public, private } => {
+                let ser_e = serde_json::to_string(&public.e).unwrap();
+                let ser_e = ser_e.strip_prefix("\"").unwrap().to_string();
+                let ser_e= ser_e.strip_suffix("\"").unwrap().to_string();
+                let ser_e = base64::decode(ser_e).unwrap();
+                let public_key = RSAPublicKey::from_components(&public.n, ser_e.as_slice());
+                assert!(public_key.is_ok());
+                let public_key = public_key.unwrap();
+                // public_key.verify_token::<NoCustomClaims>(&token, None)?;
+            }
+            Key::Symmetric { .. } => {}
+        }
+
     }
 }
