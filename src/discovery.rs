@@ -1,8 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::{error, fmt};
 use url::{ParseError, Url};
-use jwt_simple::prelude::RSAPublicKey;
-use jsonwebkey::JsonWebKey;
+use jwt_simple::prelude::{RSAPublicKey, RS256PublicKey};
+use jsonwebkey::{JsonWebKey, Key};
 use crate::messages::{HttpRequest, HttpResponse};
 use oauth2::http::{Method, StatusCode};
 use oauth2::http::header::ACCEPT;
@@ -97,10 +97,26 @@ pub fn discovery_response(
 }
 
 
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
 pub struct JsonWebKeySet
 {
     keys: Vec<JsonWebKey>,
+}
+
+impl JsonWebKeySet {
+    pub fn keys(&self) -> Vec<RS256PublicKey> {
+        self.keys.iter().filter_map(
+            |key| {
+                if let Key::RSA { public, private } = &*key.key {
+                    let ser_e = serde_json::to_string(&public.e).unwrap();
+                    let ser_e = ser_e.strip_prefix("\"").unwrap().to_string();
+                    let ser_e= ser_e.strip_suffix("\"").unwrap().to_string();
+                    let ser_e = base64::decode(ser_e).unwrap();
+                    Some(RS256PublicKey::from_components(&public.n, ser_e.as_slice()).unwrap())
+                } else { None }
+            }
+        ).collect()
+    }
 }
 
 #[derive(Debug, Deserialize, PartialEq, Serialize)]
@@ -135,11 +151,13 @@ mod tests {
     use crate::discovery::ConfigError;
     use std::borrow::Cow;
     use jsonwebkey::Key;
-    use jwt_simple::prelude::{RS384PublicKey, RSAPublicKey, NoCustomClaims};
+    use jwt_simple::prelude::{RS256PublicKey, RSAPublicKey, NoCustomClaims, RSAPublicKeyLike, VerificationOptions, Duration, Audiences};
     use serde::Serialize;
     use oauth2::url::form_urlencoded::ByteSerialize;
     use crate::messages::HttpResponse;
     use oauth2::http::StatusCode;
+    use std::collections::HashSet;
+    use std::u64::MAX;
 
     #[test]
     fn discovery_request() {
@@ -211,6 +229,49 @@ mod tests {
             }
             Key::Symmetric { .. } => {}
         }
+    }
+
+    #[test]
+    fn keys() {
+        const RAW_ID_TOKEN: &str = "eyJraWQiOiJtb2NrLW9hdXRoMi1zZXJ2ZXIta2V5IiwidHlwIjoiSldUIiwiYWxnIjoiUlMyNTYifQ.eyJzdWIiOiJ0ZXN0ZXIxIiwiYXVkIjoiYXVkLXRva2VuLXRlc3RlciIsImFjciI6IjEiLCJuYmYiOjE2MTkzNjUyMzUsImlzcyI6Imh0dHA6XC9cL21vY2stb2F1dGgyLXNlcnZlcjo4MDgwXC9jdXN0b21pc3MiLCJleHAiOjE2MTkzNjUzNTUsImlhdCI6MTYxOTM2NTIzNSwianRpIjoiZWM5OTgzOTYtOTI2NC00ZTU4LWEyMGEtZTAyMDk3ODU4NDNmIn0.Z0c2Tx15jp2VU1xk3uce9IXAMTG_q4DHGqJvcsO7G3G1QBt1Euob5UbCk4jyPYmpX6dIjTuAmbCYOuKJ732CFh4RIS_NXmO9K-402h61I-JypD2TeZjTvIGTrlubTxieq5b2-J2ZFMXFndt2zaUE8VYdti2MSwNp-IwS1pJGrvbCjw77s61lMn2vw_UUVcBEp99qojfdw97Da-KccBIZYEZXs0RXQkg2--iy-rqv6LNVD3CLrGyr-aXN1jppHX-ZGlukFkSIwLudEhE615R2x7LbYG0-NVoRpQg1oFHywwSUqGm_I-S7VisZHUKxr8pQK1RspOXZZt2mTQaifxFY-A";
+        let body = "{
+        \"keys\" : [ {
+            \"kty\" : \"RSA\",
+            \"e\" : \"AQAB\",
+            \"use\" : \"sig\",
+            \"kid\" : \"mock-oauth2-server-key\",
+            \"n\" : \"k38LU5EY3j0s5FMl-Pae_AOXt_bmt-as3C1n9vWVAyCvcuE3i_ootBEMPLQPJEru2NH-cfN7TrmdNy1XeKZVg1Y6AUXTTl0qHdyfSH65t2M1ieS0D2RTiiXmLAbZ72UzNUIo2rOgppltfNhF1tG29cNg5dsmecszrOPOfcnxUcNNewkIF-FZxL_xPhuefqhoUA89unVZHuh6ZUuesusdK0i-VqsapNpSj7ba0OORDNciMbaG3R5fWj4k1LdpvoPNAjyiF7xvJzIW5BuxKEKUgnXWrK4JexHd9TVDsXoyx_oRBlTaMqn4t2bRYrQn-8aTOQ7uq7AYeHPLmWXr1FSggw\"
+        } ]
+    }".to_string().into_bytes();
+        let response = HttpResponse {
+            status_code: StatusCode::OK,
+            headers: vec![],
+            body,
+        };
+
+        let result = discovery::jwks_response(
+            response,
+        ).unwrap();
+
+        let keys = result.keys();
+        let key = &keys[0];
+        let options = VerificationOptions {
+            reject_before: None,
+            accept_future: false,
+            required_subject: None,
+            required_key_id: None,
+            required_public_key: None,
+            required_nonce: None,
+            allowed_issuers: None,
+            allowed_audiences: Some(HashSet::from(Audiences::AsString("aud-token-tester".to_string()))),
+            time_tolerance: Some(Duration::from_days(10_000)), // TODO, will fail someday in the future :P
+            max_validity: None};
+        let claims = key.verify_token::<NoCustomClaims>(
+            RAW_ID_TOKEN,
+            Some(options)
+
+        ).unwrap();
 
     }
+
 }
