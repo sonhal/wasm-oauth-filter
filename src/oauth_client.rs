@@ -19,11 +19,11 @@ pub static CLIENT_PATHS: (&str, &str, &str) = (CALLBACK_PATH, START_PATH, SIGN_O
 
 
 pub(crate) struct OAuthClient {
-    config: ServiceConfig,
+    config: ClientConfig,
     client: BasicClient,
 }
 
-struct ServiceConfig {
+struct ClientConfig {
     cookie_name: String,
     redirect_url: url::Url,
     authorization_url: url::Url,
@@ -40,7 +40,7 @@ impl OAuthClient {
     pub fn new(
         config: FilterConfig,
     ) -> Result<OAuthClient, ParseError> {
-        let auther_config = ServiceConfig::from(config);
+        let auther_config = ClientConfig::from(config);
 
         let client = BasicClient::new(
             auther_config.client_id.clone(),
@@ -218,9 +218,9 @@ impl OAuthClient {
 }
 
 
-impl ServiceConfig {
-    fn from(config: FilterConfig) -> ServiceConfig {
-        ServiceConfig {
+impl ClientConfig {
+    fn from(config: FilterConfig) -> ClientConfig {
+        ClientConfig {
             cookie_name: config.cookie_name,
             redirect_url: url::Url::parse(config.redirect_uri.as_str())
                 .expect("Error parsing FilterConfig redirect_uri when creating OAutherConfig"),
