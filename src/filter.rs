@@ -299,24 +299,41 @@ impl Context for OAuthRootContext {
         body_size: usize,
         _num_trailers: usize,
     ) {
-        log::debug!("HTTP response");
+        log::debug!("OAuthRootContext received HTTP response");
         let bytes = match self.get_http_call_response_body(0, body_size) {
             None => {
-                log::error!("No response body");
-                panic!("Invalid HTTP response, no response body")
+                log::error!("No body in HTTP response");
+                return;
             }
             Some(bytes) => bytes,
         };
+
         if self.provider_metadata.is_none() {
-            self.parse_provider_metadata(bytes);
-            let request = discovery::jwks_request(self.provider_metadata.clone().unwrap().jwks_url());
-            match self.dispatch(request) {
-                Ok(_) => { log::debug!("successfully jwks request")}
-                Err(_) => { log::error!("Failed to jwks request")}
-            }
+            ProviderMetadata::from_bytes(bytes)
+                .map_err(|err| {
+                    log::error!("ERROR parsing ProviderMetadata = {}", err);
+                    panic!("Invalid ProviderMetadata response") // Crash hard here as we cannot serve requests
+                })
+                .map(|provider_metadata| {
+                    self.provider_metadata = Some(provider_metadata);
+                    let request = discovery::jwks_request(self.provider_metadata.clone().unwrap().jwks_url());
+                    match self.dispatch(request) {
+                        Ok(_) => { log::debug!("successfully JWKS request")}
+                        Err(err) => { log::error!("Failed to JWKS request, Envoy status = {:?}", err)}
+                    }
+                    log::debug!("Provider Metadata configured: {:?}", self.provider_metadata)
+                });
         } else {
-            self.parse_jwks(bytes);
-            self.set_tick_period(Duration::from_secs(0)); // Turn of tick events
+            JsonWebKeySet::from_bytes(bytes)
+                .map_err( |err| {
+                    log::error!("ERROR parsing JsonWebKeySet = {}", err);
+                    panic!("Invalid JWKS response body");
+            })
+                .map(|jwks| {
+                    self.jwks = Some(jwks);
+                    log::debug!("JWKS configured: {:?}", self.jwks);
+                    self.stop_discovery();
+                });
         }
     }
 }
@@ -329,12 +346,12 @@ impl RootContext for OAuthRootContext {
             log::info!("OAuth filter configured with: {:?}", oauth_filter_config);
             self.config = Some(oauth_filter_config);
 
-            if self.config.clone().unwrap().oidc_issuer_url.is_some() {
-                self.set_tick_period(Duration::from_secs(2));
+            if self.config.as_ref().unwrap().is_oidc_configured() {
+                self.start_discovery();
                 true
             } else { true }
         } else {
-            log::error!("No configuration supplied for OAuth filter");
+            log::error!("Error when configuring RootContext, no configuration supplied for OAuth filter");
             false
         }
     }
@@ -342,7 +359,7 @@ impl RootContext for OAuthRootContext {
     fn on_tick(&mut self) {
         log::debug!("RootContext tick, request active={}", self.request_active);
         if !self.request_active {
-            match self.oidc_config() {
+            match self.dispatch_discovery() {
                 Ok(_) => { log::debug!("successfully dispatched discovery request")}
                 Err(_) => { log::error!("Failed to dispatch discovery request")}
             }
@@ -385,7 +402,22 @@ impl RootContext for OAuthRootContext {
 }
 
 impl OAuthRootContext {
-    fn oidc_config(&self) -> Result<(), discovery::ConfigError> {
+
+
+    // Activate RootContext tick handler which will dispatch discovery request
+    fn start_discovery(&self) {
+        // Cannot dispatch HTTP calls in config handler, so we need to dispatch in tick handler
+        self.set_tick_period(Duration::from_secs(2))
+    }
+
+    // Deactivate RootContext tick handler
+    fn stop_discovery(&self) {
+        // Stop the tick events
+        self.set_tick_period(Duration::from_secs(0))
+    }
+
+    // Dispatch a OIDC discovery request to the authorization server
+    fn dispatch_discovery(&self) -> Result<(), discovery::ConfigError> {
 
         let config = if let Some(config) = &self.config {
             config
@@ -408,7 +440,7 @@ impl OAuthRootContext {
         Ok(())
     }
 
-    // Send redirect response to end-user
+    // Dispatch HTTP request to the authorization server
     fn dispatch(&self, request: HttpRequest) -> Result<u32, Status> {
         log::debug!("HTTP request to cluster={}  request={:?}",&self.config.as_ref().unwrap().auth_cluster, request);
         self.dispatch_http_call(
@@ -422,36 +454,33 @@ impl OAuthRootContext {
 
     fn parse_provider_metadata(&mut self, bytes: Bytes) {
         let provider_metadata = if let Ok(provider_metadata) =
-        serde_json::from_slice::<discovery::ProviderMetadata>(bytes.as_slice()) {
+        ProviderMetadata::from_bytes(bytes) {
             provider_metadata
         } else {
             log::error!("Invalid response body");
             panic!("Invalid discovery response body")
         };
-        if self.provider_metadata.is_some() {
-            log::error!("provider properties already set");
-            panic!("Invalid RootContext state, provider properties already set")
-        } else {
-            self.provider_metadata = Some(provider_metadata);
-            log::info!("Provider Metadata configured: {:?}", self.provider_metadata)
-        }
+        self.provider_metadata = Some(provider_metadata);
+        log::debug!("Provider Metadata configured: {:?}", self.provider_metadata)
     }
 
     fn parse_jwks(&mut self, bytes: Bytes) {
         let jwks = if let Ok(jwks) =
-        serde_json::from_slice::<discovery::JsonWebKeySet>(bytes.as_slice()) {
+        JsonWebKeySet::from_bytes(bytes) {
             jwks
         } else {
             log::error!("Invalid response body");
             panic!("Invalid JWKS response body")
         };
-        if self.jwks.is_some() {
-            log::error!("JWKS already set");
-            panic!("Invalid RootContext state, JWKS set")
-        } else {
-            self.jwks = Some(jwks);
-            log::info!("JWKS configured: {:?}", self.jwks)
-        }
+        self.jwks = Some(jwks);
+        log::debug!("JWKS configured: {:?}", self.jwks)
+    }
+}
+
+
+impl FilterConfig {
+    fn is_oidc_configured(&self) -> bool {
+        self.scopes.contains(&"openid".to_string())
     }
 }
 

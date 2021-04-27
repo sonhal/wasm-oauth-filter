@@ -46,6 +46,14 @@ pub struct ProviderMetadata {
 }
 
 impl ProviderMetadata {
+
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<ProviderMetadata, ConfigError> {
+        serde_json::from_slice::<ProviderMetadata>(bytes.as_slice())
+            .map_err(|err| {
+                ConfigError::Parse(err.to_string())
+            })
+    }
+
     pub fn jwks_url(&self) -> Url {
         self.jwks_uri.clone()
     }
@@ -104,6 +112,14 @@ pub struct JsonWebKeySet
 }
 
 impl JsonWebKeySet {
+
+    pub fn from_bytes(bytes: Vec<u8>) -> Result<JsonWebKeySet, ConfigError> {
+        serde_json::from_slice::<JsonWebKeySet>(bytes.as_slice())
+            .map_err(|err| {
+                ConfigError::Parse(err.to_string())
+            })
+    }
+
     pub fn keys(&self) -> Vec<RS256PublicKey> {
         self.keys.iter().filter_map(
             |key| {
