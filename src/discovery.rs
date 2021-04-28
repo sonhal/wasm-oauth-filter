@@ -6,6 +6,8 @@ use jsonwebkey::{JsonWebKey, Key};
 use crate::messages::{HttpRequest, HttpResponse};
 use oauth2::http::{Method, StatusCode};
 use oauth2::http::header::ACCEPT;
+use crate::oauth_client::ClientConfig;
+use crate::FilterConfig;
 
 
 pub const MIME_TYPE_JSON: &str = "application/json";
@@ -19,6 +21,7 @@ pub enum ConfigError {
     Response(u32, String),
     Parse(String),
     Validation(String),
+    BadState(String)
 }
 
 impl fmt::Display for ConfigError {
@@ -52,6 +55,28 @@ impl ProviderMetadata {
             .map_err(|err| {
                 ConfigError::Parse(err.to_string())
             })
+    }
+
+    pub(crate) fn to_client_config(&self, filter_config: &FilterConfig) -> ClientConfig {
+        ClientConfig::new(
+            &filter_config.cookie_name,
+            &filter_config.redirect_uri,
+            self.authorization_endpoint.as_str(),
+            self.token_endpoint.clone().unwrap_or(filter_config.token_uri.parse().unwrap()).as_str(),
+            &filter_config.client_id,
+            &filter_config.client_secret,
+            filter_config.extra_params.clone(),
+            filter_config.scopes.clone(),
+            filter_config.cookie_expire as u32,
+        )
+    }
+
+    pub fn authorization_endpoint(&self) -> &Url {
+        &self.authorization_endpoint
+    }
+
+    pub fn token_endpoint(&self) -> &Option<Url> {
+        &self.token_endpoint
     }
 
     pub fn jwks_url(&self) -> Url {

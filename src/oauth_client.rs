@@ -10,6 +10,7 @@ use crate::{FilterConfig, util};
 use crate::messages::{DownStreamResponse, TokenResponse};
 use crate::oauth_client_types::{Access, ClientError, Headers, Redirect, Request, TokenRequest};
 use crate::session::{Session, SessionType, SessionUpdate};
+use crate::discovery::ProviderMetadata;
 
 
 pub static CALLBACK_PATH: &str = "/callback";
@@ -23,7 +24,7 @@ pub(crate) struct OAuthClient {
     client: BasicClient,
 }
 
-struct ClientConfig {
+pub(crate) struct ClientConfig {
     cookie_name: String,
     redirect_url: url::Url,
     authorization_url: url::Url,
@@ -38,20 +39,19 @@ struct ClientConfig {
 impl OAuthClient {
 
     pub fn new(
-        config: FilterConfig,
+        config: ClientConfig,
     ) -> Result<OAuthClient, ParseError> {
-        let auther_config = ClientConfig::from(config);
 
         let client = BasicClient::new(
-            auther_config.client_id.clone(),
-            Some(auther_config.client_secret.clone()),
-            AuthUrl::from_url(auther_config.authorization_url.clone()),
-            Some(TokenUrl::from_url(auther_config.token_url.clone()))
+            config.client_id.clone(),
+            Some(config.client_secret.clone()),
+            AuthUrl::from_url(config.authorization_url.clone()),
+            Some(TokenUrl::from_url(config.token_url.clone()))
         )
-            .set_redirect_url(RedirectUrl::from_url(auther_config.redirect_url.clone()));
+            .set_redirect_url(RedirectUrl::from_url(config.redirect_url.clone()));
 
         Ok(OAuthClient {
-            config: auther_config,
+            config,
             client,
         })
     }
@@ -219,20 +219,31 @@ impl OAuthClient {
 
 
 impl ClientConfig {
-    fn from(config: FilterConfig) -> ClientConfig {
+
+    pub fn new(
+        cookie_name: &str,
+        redirect_url: &str,
+        authorization_url: &str,
+        token_url: &str,
+        client_id: &str,
+        client_secret: &str,
+        extra_params: Vec<(String, String)>,
+        scopes: Vec<String>,
+        cookie_expire: u32,
+    ) -> ClientConfig {
         ClientConfig {
-            cookie_name: config.cookie_name,
-            redirect_url: url::Url::parse(config.redirect_uri.as_str())
+            cookie_name: cookie_name.to_string(),
+            redirect_url: url::Url::parse(redirect_url)
                 .expect("Error parsing FilterConfig redirect_uri when creating OAutherConfig"),
-            authorization_url: url::Url::parse(config.auth_uri.as_str())
+            authorization_url: url::Url::parse(authorization_url)
                 .expect("Error parsing FilterConfig auth_uri when creating OAutherConfig"),
-            token_url: url::Url::parse(config.token_uri.as_str())
+            token_url: url::Url::parse(token_url)
                 .expect("Error parsing FilterConfig token_uri when creating OAutherConfig"),
-            client_id: ClientId::new(config.client_id),
-            client_secret: ClientSecret::new(config.client_secret),
-            extra_params: config.extra_params,
-            scopes: config.scopes.clone(),
-            cookie_expire: Duration::seconds(config.cookie_expire as i64)
+            client_id: ClientId::new(client_id.to_string()),
+            client_secret: ClientSecret::new(client_secret.to_string()),
+            extra_params,
+            scopes,
+            cookie_expire: Duration::seconds(cookie_expire as i64)
         }
     }
 }
@@ -258,7 +269,7 @@ mod tests {
 
     use super::*;
 
-    fn test_config() -> FilterConfig {
+    fn test_config() -> ClientConfig {
         FilterConfig {
             redirect_uri: "https://redirect".to_string(),
             target_header_name: "".to_string(),
@@ -273,7 +284,7 @@ mod tests {
             cookie_expire: 120,
             scopes: vec!["openid".to_string()],
             oidc_issuer_url: None
-        }
+        }.client_config()
     }
 
     fn test_client() -> crate::oauth_client::OAuthClient {
@@ -437,7 +448,7 @@ mod tests {
                           "email".to_string(),
                           "profile".to_string()];
         let config = test_config();
-        let config = FilterConfig {
+        let config = ClientConfig {
             scopes: scopes.clone(),
             ..config
         };

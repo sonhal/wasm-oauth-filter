@@ -23,7 +23,7 @@ use std::cell::RefCell;
 use crate::session::{SessionCache, SessionUpdate};
 use std::ops::Deref;
 use crate::messages::{ErrorBody, DownStreamResponse, TokenResponse, HttpRequest};
-use crate::oauth_client::{CALLBACK_PATH, START_PATH, SIGN_OUT_PATH};
+use crate::oauth_client::{CALLBACK_PATH, START_PATH, SIGN_OUT_PATH, ClientConfig};
 use crate::oauth_client_types::{TokenRequest, ClientError, Redirect, Access, Request};
 use url::form_urlencoded::parse;
 use crate::discovery::{ConfigError, JsonWebKeySet, ProviderMetadata};
@@ -87,10 +87,11 @@ impl OAuthFilter {
 
     fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
         log::debug!("Creating new HttpContext");
-        log::debug!("Cache state={:?}", cache);
+        log::debug!("Cache for HttpContext = {:?}", cache);
+        log::debug!("Config for HttpContext = {:?}", config);
         let cache = RefCell::new(cache);
 
-        let oauth_client = crate::oauth_client::OAuthClient::new(config.clone())?;
+        let oauth_client = crate::oauth_client::OAuthClient::new(config.client_config())?;
         Ok(OAuthFilter {
             config,
             oauth_client,
@@ -340,10 +341,11 @@ impl Context for OAuthRootContext {
 
 impl RootContext for OAuthRootContext {
 
+    // handles receiving of configuration when filter is instantiated
     fn on_configure(&mut self, _plugin_configuration_size: usize) -> bool {
         if let Some(config_buffer) = self.get_configuration() {
             let oauth_filter_config: FilterConfig = serde_json::from_slice(config_buffer.as_slice()).unwrap();
-            log::info!("OAuth filter configured with: {:?}", oauth_filter_config);
+            log::info!("OAuth filter configured with:\n{:?}", oauth_filter_config);
             self.config = Some(oauth_filter_config);
 
             if self.config.as_ref().unwrap().is_oidc_configured() {
@@ -356,6 +358,7 @@ impl RootContext for OAuthRootContext {
         }
     }
 
+    // Handles on tick events from host
     fn on_tick(&mut self) {
         log::debug!("RootContext tick, request active={}", self.request_active);
         if !self.request_active {
@@ -367,6 +370,7 @@ impl RootContext for OAuthRootContext {
         self.request_active = true;
     }
 
+    // Creates a new HttpContext for a HTTP request from end-user
     fn create_http_context(&self, _context_id: u32) -> Option<Box<dyn HttpContext>> {
         match self.config.as_ref() {
             None => {
@@ -376,8 +380,8 @@ impl RootContext for OAuthRootContext {
             Some(filter_config) => {
                 match SharedCache::from_host(self) {
                     Ok(cache) => {
-                        log::info!("Stored cache returned from host");
-                        Some(Box::new(OAuthFilter::new(filter_config.clone(), cache).unwrap()))
+                        log::debug!("Stored cache returned from host");
+                        Some(Box::new(OAuthFilter::new(self.filter_config().unwrap(), cache).unwrap()))
                     }
                     Err(_) => {
                         // attempt to create shared
@@ -403,6 +407,26 @@ impl RootContext for OAuthRootContext {
 
 impl OAuthRootContext {
 
+    fn filter_config(&self) -> Result<FilterConfig, ConfigError> {
+        let filter_config = if let Some(config) =  &self.config {
+            config
+        } else { return Err(ConfigError::BadState("RootContext config not set".to_string())) };
+        if filter_config.is_oidc_configured() {
+            match &self.provider_metadata {
+                None => return Err(ConfigError::BadState("provider_metadata not set".to_string())),
+                Some(provider_metadata) => Ok(
+                    FilterConfig {
+                        token_uri: provider_metadata.token_endpoint().clone().unwrap().to_string(),
+                        auth_uri: provider_metadata.authorization_endpoint().to_string(),
+                        ..filter_config.clone()
+                    }
+                ),
+            }
+        } else {
+            Ok(filter_config.clone())
+        }
+
+    }
 
     // Activate RootContext tick handler which will dispatch discovery request
     fn start_discovery(&self) {
@@ -481,6 +505,20 @@ impl OAuthRootContext {
 impl FilterConfig {
     fn is_oidc_configured(&self) -> bool {
         self.scopes.contains(&"openid".to_string())
+    }
+
+    fn client_config(&self) -> ClientConfig {
+        ClientConfig::new(
+            &self.cookie_name,
+            self.redirect_uri.as_str(),
+            self.auth_uri.as_str(),
+            self.token_uri.as_str(),
+            &self.client_id,
+            &self.client_secret,
+            self.extra_params.clone(),
+            self.scopes.clone(),
+            self.cookie_expire as u32
+        )
     }
 }
 
