@@ -6,6 +6,7 @@ mod messages;
 mod oauth_client;
 mod oauth_client_types;
 mod discovery;
+mod config;
 
 
 use proxy_wasm::types::LogLevel;
@@ -28,6 +29,9 @@ use crate::oauth_client_types::{TokenRequest, ClientError, Redirect, Access, Req
 use url::form_urlencoded::parse;
 use crate::discovery::{ConfigError, JsonWebKeySet, ProviderMetadata};
 use std::collections::HashMap;
+use jwt_simple::prelude::RSAPublicKeyLike;
+use jwt_simple::claims::{NoCustomClaims, JWTClaims};
+use jwt_simple::Error;
 
 
 #[cfg(not(test))]
@@ -46,21 +50,21 @@ pub fn _start() {
 }
 
 struct OAuthRootContext {
-    config: Option<FilterConfig>,
+    config: Option<RawFilterConfig>,
     provider_metadata: Option<ProviderMetadata>,
     jwks: Option<JsonWebKeySet>,
     request_active: bool,
 }
 
 struct OAuthFilter {
-    config: FilterConfig,
+    config: RawFilterConfig,
     oauth_client: crate::oauth_client::OAuthClient,
     cache: RefCell<SharedCache>,
 }
 
 
 #[derive(Deserialize, Clone, Debug)]
-pub struct FilterConfig {
+pub struct RawFilterConfig {
     #[serde(default = "default_redirect_uri")]
     redirect_uri: String,
     #[serde(default = "default_target_header_name")]
@@ -85,7 +89,7 @@ pub struct FilterConfig {
 
 impl OAuthFilter {
 
-    fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
+    fn new(config: RawFilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
         log::debug!("Creating new HttpContext");
         log::debug!("Cache for HttpContext = {:?}", cache);
         log::debug!("Config for HttpContext = {:?}", config);
@@ -344,7 +348,7 @@ impl RootContext for OAuthRootContext {
     // handles receiving of configuration when filter is instantiated
     fn on_configure(&mut self, _plugin_configuration_size: usize) -> bool {
         if let Some(config_buffer) = self.get_configuration() {
-            let oauth_filter_config: FilterConfig = serde_json::from_slice(config_buffer.as_slice()).unwrap();
+            let oauth_filter_config: RawFilterConfig = serde_json::from_slice(config_buffer.as_slice()).unwrap();
             log::info!("OAuth filter configured with:\n{:?}", oauth_filter_config);
             self.config = Some(oauth_filter_config);
 
@@ -407,7 +411,7 @@ impl RootContext for OAuthRootContext {
 
 impl OAuthRootContext {
 
-    fn filter_config(&self) -> Result<FilterConfig, ConfigError> {
+    fn filter_config(&self) -> Result<RawFilterConfig, ConfigError> {
         let filter_config = if let Some(config) =  &self.config {
             config
         } else { return Err(ConfigError::BadState("RootContext config not set".to_string())) };
@@ -415,7 +419,7 @@ impl OAuthRootContext {
             match &self.provider_metadata {
                 None => return Err(ConfigError::BadState("provider_metadata not set".to_string())),
                 Some(provider_metadata) => Ok(
-                    FilterConfig {
+                    RawFilterConfig {
                         token_uri: provider_metadata.token_endpoint().clone().unwrap().to_string(),
                         auth_uri: provider_metadata.authorization_endpoint().to_string(),
                         ..filter_config.clone()
@@ -475,34 +479,10 @@ impl OAuthRootContext {
             Duration::from_secs(5)
         )
     }
-
-    fn parse_provider_metadata(&mut self, bytes: Bytes) {
-        let provider_metadata = if let Ok(provider_metadata) =
-        ProviderMetadata::from_bytes(bytes) {
-            provider_metadata
-        } else {
-            log::error!("Invalid response body");
-            panic!("Invalid discovery response body")
-        };
-        self.provider_metadata = Some(provider_metadata);
-        log::debug!("Provider Metadata configured: {:?}", self.provider_metadata)
-    }
-
-    fn parse_jwks(&mut self, bytes: Bytes) {
-        let jwks = if let Ok(jwks) =
-        JsonWebKeySet::from_bytes(bytes) {
-            jwks
-        } else {
-            log::error!("Invalid response body");
-            panic!("Invalid JWKS response body")
-        };
-        self.jwks = Some(jwks);
-        log::debug!("JWKS configured: {:?}", self.jwks)
-    }
 }
 
 
-impl FilterConfig {
+impl RawFilterConfig {
     fn is_oidc_configured(&self) -> bool {
         self.scopes.contains(&"openid".to_string())
     }

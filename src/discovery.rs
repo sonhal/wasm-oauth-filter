@@ -7,7 +7,7 @@ use crate::messages::{HttpRequest, HttpResponse};
 use oauth2::http::{Method, StatusCode};
 use oauth2::http::header::ACCEPT;
 use crate::oauth_client::ClientConfig;
-use crate::FilterConfig;
+use crate::RawFilterConfig;
 
 
 pub const MIME_TYPE_JSON: &str = "application/json";
@@ -50,6 +50,30 @@ pub struct ProviderMetadata {
 
 impl ProviderMetadata {
 
+    pub fn new(
+        issuer: Url,
+        authorization_endpoint: Url,
+        token_endpoint: Option<Url>,
+        userinfo_endpoint: Option<Url>,
+        jwks_uri: Url,
+        scopes_supported: Option<Vec<String>>,
+        response_types_supported: Vec<String>,
+        subject_types_supported: Vec<String>,
+        id_token_signing_alg_values_supported: Vec<String>,
+    ) -> ProviderMetadata {
+        ProviderMetadata {
+            issuer,
+            authorization_endpoint,
+            token_endpoint,
+            userinfo_endpoint,
+            jwks_uri,
+            scopes_supported,
+            response_types_supported,
+            subject_types_supported,
+            id_token_signing_alg_values_supported
+        }
+    }
+
     pub fn from_bytes(bytes: Vec<u8>) -> Result<ProviderMetadata, ConfigError> {
         serde_json::from_slice::<ProviderMetadata>(bytes.as_slice())
             .map_err(|err| {
@@ -57,7 +81,7 @@ impl ProviderMetadata {
             })
     }
 
-    pub(crate) fn to_client_config(&self, filter_config: &FilterConfig) -> ClientConfig {
+    pub(crate) fn to_client_config(&self, filter_config: &RawFilterConfig) -> ClientConfig {
         ClientConfig::new(
             &filter_config.cookie_name,
             &filter_config.redirect_uri,
@@ -69,6 +93,10 @@ impl ProviderMetadata {
             filter_config.scopes.clone(),
             filter_config.cookie_expire as u32,
         )
+    }
+
+    pub fn issuer(&self) -> &Url {
+        &self.issuer
     }
 
     pub fn authorization_endpoint(&self) -> &Url {
@@ -138,6 +166,12 @@ pub struct JsonWebKeySet
 
 impl JsonWebKeySet {
 
+    pub fn new(keys: Vec<JsonWebKey>) -> JsonWebKeySet {
+        JsonWebKeySet {
+            keys
+        }
+    }
+
     pub fn from_bytes(bytes: Vec<u8>) -> Result<JsonWebKeySet, ConfigError> {
         serde_json::from_slice::<JsonWebKeySet>(bytes.as_slice())
             .map_err(|err| {
@@ -158,18 +192,6 @@ impl JsonWebKeySet {
             }
         ).collect()
     }
-}
-
-#[derive(Debug, Deserialize, PartialEq, Serialize)]
-struct RSAJsonWebKeySet {
-    alg: String, // "RS256"
-    kty: String, // "RSA"
-    _use: String, // "sig"
-    n: String, // modulus
-    e: String, // exponent
-    kid: String, // "sttmy2a1FKl1AAzi7e1zW"
-    x5t: String, // "J6LAUO_mZE52KNapwehthok-r0w"
-    x5c: Vec<String> // X.509 cert chain
 }
 
 

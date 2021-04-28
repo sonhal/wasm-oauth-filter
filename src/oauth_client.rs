@@ -6,7 +6,7 @@ use oauth2::http::HeaderMap;
 use time::Duration;
 use url::{Url, ParseError};
 
-use crate::{FilterConfig, util};
+use crate::{RawFilterConfig, util};
 use crate::messages::{DownStreamResponse, TokenResponse};
 use crate::oauth_client_types::{Access, ClientError, Headers, Redirect, Request, TokenRequest};
 use crate::session::{Session, SessionType, SessionUpdate};
@@ -263,14 +263,14 @@ mod tests {
     use oauth2::basic::{BasicTokenResponse, BasicTokenType};
     use oauth2::http::header::{AUTHORIZATION, FORWARDED, SET_COOKIE};
 
-    use crate::FilterConfig;
+    use crate::RawFilterConfig;
     use crate::messages::{SuccessfulResponse, TokenResponse};
     use crate::session::{AuthorizationResponseVerifiers, AuthorizationTokens, Session, SessionType};
 
     use super::*;
 
     fn test_config() -> ClientConfig {
-        FilterConfig {
+        RawFilterConfig {
             redirect_uri: "https://redirect".to_string(),
             target_header_name: "".to_string(),
             cookie_name: "sessioncookie".to_string(),
