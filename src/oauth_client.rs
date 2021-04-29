@@ -268,23 +268,21 @@ mod tests {
     use crate::session::{AuthorizationResponseVerifiers, AuthorizationTokens, Session, SessionType};
 
     use super::*;
+    use crate::config::{FilterConfig, BasicOAuth};
+    use time::NumericalDuration;
 
     fn test_config() -> ClientConfig {
-        RawFilterConfig {
-            redirect_uri: "https://redirect".to_string(),
-            target_header_name: "".to_string(),
-            cookie_name: "sessioncookie".to_string(),
-            auth_cluster: "some_cluster".to_string(),
-            issuer: "".to_string(),
-            auth_uri: "https://authorization".to_string(),
-            token_uri: "https://token".to_string(),
-            client_id: "myclient".to_string(),
-            client_secret: "mysecret".to_string(),
-            extra_params: Vec::new(),
-            cookie_expire: 120,
-            scopes: vec!["openid".to_string()],
-            oidc_issuer_url: None
-        }.client_config()
+        FilterConfig::oauth(
+            "sessioncookie",
+            "cluster",
+            "issuer",
+            &"https://authorization".parse().unwrap(),
+            &"https://token".parse().unwrap(),
+            "myclient",
+            "mysecret",
+            vec!["openid".to_string()],
+            1.hours(),
+            vec![]).client()
     }
 
     fn test_client() -> crate::oauth_client::OAuthClient {

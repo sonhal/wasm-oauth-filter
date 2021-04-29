@@ -81,20 +81,6 @@ impl ProviderMetadata {
             })
     }
 
-    pub(crate) fn to_client_config(&self, filter_config: &RawFilterConfig) -> ClientConfig {
-        ClientConfig::new(
-            &filter_config.cookie_name,
-            &filter_config.redirect_uri,
-            self.authorization_endpoint.as_str(),
-            self.token_endpoint.clone().unwrap_or(filter_config.token_uri.parse().unwrap()).as_str(),
-            &filter_config.client_id,
-            &filter_config.client_secret,
-            filter_config.extra_params.clone(),
-            filter_config.scopes.clone(),
-            filter_config.cookie_expire as u32,
-        )
-    }
-
     pub fn issuer(&self) -> &Url {
         &self.issuer
     }
@@ -112,7 +98,7 @@ impl ProviderMetadata {
     }
 }
 
-pub fn discovery_request(issuer_url: Url) -> Result<HttpRequest, ParseError> {
+pub fn discovery_request(issuer_url: &Url) -> Result<HttpRequest, ParseError> {
     let discovery_url = issuer_url.join(CONFIG_URL_SUFFIX)?;
 
     Ok(HttpRequest::new(
@@ -224,7 +210,7 @@ mod tests {
 
     #[test]
     fn discovery_request() {
-        let result = discovery::discovery_request("https://issuer/customissuer/".parse().unwrap());
+        let result = discovery::discovery_request(&"https://issuer/customissuer/".parse().unwrap());
         assert!(result.is_ok());
         assert!(result.unwrap().url().to_string().contains("customissuer"))
     }
