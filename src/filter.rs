@@ -9,7 +9,7 @@ mod session;
 mod util;
 
 use crate::cache::SharedCache;
-use crate::config::{ExtraConfig, FilterConfig, RawFilterConfig, RawOIDC};
+use crate::config::{ExtraConfig, FilterConfig, RawFilterConfig};
 use crate::discovery::{ConfigError, JsonWebKeySet, ProviderMetadata};
 use crate::messages::{DownStreamResponse, ErrorBody, HttpRequest, TokenResponse};
 use crate::oauth_client::{ClientConfig, CALLBACK_PATH, SIGN_OUT_PATH, START_PATH};
@@ -358,7 +358,7 @@ impl RootContext for OAuthRootContext {
 
         self.config = Some(raw_config);
 
-        if matches!(self.config, Some(RawFilterConfig::OIDC { .. })) {
+        if self.config.clone().unwrap().is_oidc() {
             self.start_discovery();
         }
         true
@@ -406,9 +406,9 @@ impl RootContext for OAuthRootContext {
                         cache
                     }
                 };
-                match filter_config {
-                    RawFilterConfig::OAuth(raw) => {
-                        match raw.filter_config() {
+                match filter_config.is_oidc() {
+                    false => {
+                        match filter_config.oauth_config() {
                             Ok(config) =>
                                 Some(Box::new(
                                 OAuthFilter::new(config, cache).unwrap(),
@@ -417,8 +417,8 @@ impl RootContext for OAuthRootContext {
                         }
 
                     }
-                    RawFilterConfig::OIDC(raw) => {
-                        match raw.filter_config(&self.provider_metadata.clone().unwrap(), &self.jwks.clone().unwrap()) {
+                    true => {
+                        match filter_config.oidc_config(&self.provider_metadata.clone().unwrap(), &self.jwks.clone().unwrap()) {
                             Ok(config) =>
                                 Some(Box::new(
                                     OAuthFilter::new(config, cache).unwrap(),
@@ -453,13 +453,13 @@ impl OAuthRootContext {
     // Dispatch a OIDC discovery request to the authorization server
     fn dispatch_discovery(&self) -> Result<(), discovery::ConfigError> {
 
-        let config = if let Some(RawFilterConfig::OIDC(config)) = &self.config{
+        let config = if let Some(config) = &self.config {
             config
         } else {
             return Err(ConfigError::BadState("Attempted discovery without OIDC config".to_string()));
         };
 
-        let request = discovery::discovery_request(config.issuer())
+        let request = discovery::discovery_request(&config.issuer().parse().unwrap())
             .map_err(|err| ConfigError::Parse(err.to_string()))?;
 
         let result = self.dispatch(request);

@@ -25,8 +25,14 @@ pub enum ConfigError {
 }
 
 impl fmt::Display for ConfigError {
+
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "Configuration error")
+        match self {
+            ConfigError::Response(status, msg) => write!(f, "Response error status={} msg={}", status, msg),
+            ConfigError::Parse(msg) => write!(f, "Parse error = {}", msg),
+            ConfigError::Validation(msg) => write!(f, "Validation error = {}", msg),
+            ConfigError::BadState(msg) => write!(f, "Bad state error = {}", msg),
+        }
     }
 }
 

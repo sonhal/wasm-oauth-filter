@@ -138,7 +138,10 @@ impl FilterConfig {
     pub fn oidc(
         cookie_name: &str,
         auth_cluster: &str,
+        issuer: &str,
         redirect_uri: &Url,
+        auth_uri: &Option<Url>,
+        token_uri: &Option<Url>,
         client_id: &str,
         client_secret: &str,
         scopes: Vec<String>,
@@ -150,10 +153,10 @@ impl FilterConfig {
         FilterConfig {
             cookie_name: cookie_name.to_string(),
             auth_cluster: auth_cluster.to_string(),
-            issuer: provider_metadata.issuer().to_string(),
+            issuer: issuer.to_string(),
             redirect_uri: redirect_uri.clone(),
-            auth_uri: provider_metadata.authorization_endpoint().clone(),
-            token_uri: provider_metadata.token_endpoint().clone().unwrap(), // TODO FIX
+            auth_uri: auth_uri.as_ref().map_or(provider_metadata.authorization_endpoint().clone(), |url| url.clone()),
+            token_uri:  token_uri.as_ref().map_or(provider_metadata.token_endpoint().clone().unwrap(), |url| url.clone()), // TODO FIX
             client_id: client_id.to_string(),
             client_secret: client_secret.to_string(),
             scopes,
@@ -220,6 +223,7 @@ pub enum ExtraConfig {
 impl ExtraConfig {
     // Validates OIDC token according to OpenID Connect Core 1.0
     fn validate(&self, token: &str, jwks: &JsonWebKeySet, options: Option<VerificationOptions>) -> Result<(), Error> {
+        log::debug!("validating id token = {}", token);
         let mut errors = vec![];
         for key in jwks.keys().iter() {
             match key.verify_token::<NoCustomClaims>(token, options.clone()) {
@@ -227,6 +231,7 @@ impl ExtraConfig {
                 Err(error) => errors.push(error),
             }
         }
+        log::error!("ERROR not valid token = {}, errors = {:?}", token, errors );
         Err(errors.pop().unwrap()) // TODO FIX
     }
 
@@ -240,17 +245,10 @@ impl ExtraConfig {
     }
 }
 
-// Enums representing the raw configuration passed from the proxy
+// Struct representing the raw configuration passed from the proxy
 // Serves as a protection layer between external and internal representation of configuration
 #[derive(Deserialize, Clone, Debug)]
-#[serde(untagged)]
-pub enum RawFilterConfig {
-    OAuth(RawOAuth),
-    OIDC(RawOIDC)
-}
-
-#[derive(Deserialize, Clone, Debug)]
-pub struct RawOAuth {
+pub struct RawFilterConfig {
     #[serde(default = "default_redirect_uri")]
     redirect_uri: String,
     #[serde(default = "default_target_header_name")]
@@ -259,26 +257,8 @@ pub struct RawOAuth {
     cookie_name: String,
     auth_cluster: String,
     issuer: String,
-    auth_uri: String,
-    token_uri: String,
-    client_id: String,
-    client_secret: String,
-    #[serde(default = "default_scopes")]
-    scopes: Vec<String>,
-    #[serde(default = "default_cookie_expire")]
-    cookie_expire: u64, // in seconds
-    #[serde(default = "default_extra_params")]
-    extra_params: Vec<(String, String)>,
-}
-
-#[derive(Deserialize, Clone, Debug)]
-pub struct RawOIDC {
-    #[serde(default = "default_redirect_uri")]
-    redirect_uri: String,
-    #[serde(default = "default_oidc_cookie_name")]
-    cookie_name: String,
-    auth_cluster: String,
-    issuer: Url,
+    auth_uri: Option<String>,
+    token_uri: Option<String>,
     client_id: String,
     client_secret: String,
     #[serde(default = "default_scopes")]
@@ -290,24 +270,15 @@ pub struct RawOIDC {
 }
 
 impl RawFilterConfig {
-    pub fn cluster(&self) -> &str{
-        match self {
-            RawFilterConfig::OAuth(raw) => raw.cluster(),
-            RawFilterConfig::OIDC(raw) => raw.cluster()
-        }
-    }
-}
-
-impl RawOAuth {
     // Convert Raw config to filter config with rich types
-    pub fn filter_config(&self) -> Result<FilterConfig, Error> {
+    pub fn oauth_config(&self) -> Result<FilterConfig, Error> {
         Ok(FilterConfig::oauth(
             &self.cookie_name,
             &self.auth_cluster,
             &self.issuer,
             &self.redirect_uri.parse().unwrap(),
-            &self.auth_uri.parse().unwrap(),  // TODO FIX
-            &self.token_uri.parse().unwrap(), // TODO FIX
+            &self.auth_uri.as_ref().unwrap().parse().unwrap(),  // TODO FIX
+            &self.token_uri.as_ref().unwrap().parse().unwrap(), // TODO FIX
             &self.client_id,
             &self.client_secret,
             self.scopes.clone(),
@@ -316,18 +287,15 @@ impl RawOAuth {
         ))
     }
 
-    pub fn cluster(&self) -> &str {
-        &self.auth_cluster
-    }
-}
-
-impl RawOIDC {
     // Convert Raw config to filter config with rich types and completed discovery
-    pub fn filter_config(&self, provider_metadata: &ProviderMetadata , jwks: &JsonWebKeySet) -> Result<FilterConfig, Error> {
+    pub fn oidc_config(&self, provider_metadata: &ProviderMetadata , jwks: &JsonWebKeySet) -> Result<FilterConfig, Error> {
         Ok(FilterConfig::oidc(
             &self.cookie_name,
             &self.auth_cluster,
+            &self.issuer,
             &self.redirect_uri.parse().unwrap(), // TODD FIX
+            &self.auth_uri.as_ref().map(|url| url.parse().unwrap()),
+            &self.token_uri.as_ref().map(|url| url.parse().unwrap()),
             &self.client_id,
             &self.client_secret,
             self.scopes.clone(),
@@ -338,14 +306,19 @@ impl RawOIDC {
         ))
     }
 
-    pub fn issuer(&self) -> &Url{
-        &self.issuer
+    pub fn is_oidc(&self) -> bool {
+        self.scopes.contains(&"openid".to_string())
     }
 
     pub fn cluster(&self) -> &str {
         &self.auth_cluster
     }
+
+    pub fn issuer(&self) -> &str {
+        &self.issuer
+    }
 }
+
 
 fn default_redirect_uri() -> String {
     "{proto}://{authority}{path}".to_owned()
@@ -400,7 +373,10 @@ mod tests {
         let oidc_config = FilterConfig::oidc(
             "cookiename",
             "some_cluster",
+            "test_issuer",
             &"https://localhost/callback".parse().unwrap(),
+            &Some("https://issuer/auth".parse().unwrap()),
+            &Some("https://issuer/token".parse().unwrap()),
             "clientid",
             "clientsecret",
             vec![],
@@ -439,7 +415,10 @@ mod tests {
         let oidc_config = FilterConfig::oidc(
             "cookiename",
             "some_cluster",
+            "http://mock-oauth2-server:8080/customiss",
             &"https://localhost/callback".parse().unwrap(),
+            &None,
+            &None,
             "clientid",
             "clientsecret",
             vec![],
@@ -488,12 +467,12 @@ mod tests {
         \"auth_uri\": \"http://localhost:8888/customiss/authorize\",
         \"client_id\": \"mycoolclientid\",
         \"client_secret\": \"mycoolclientsecret\",
-        \"scopes\": [\"openid\", \"email\", \"profile\"],
+        \"scopes\": [\"email\", \"profile\"],
         \"cookie_expire\": 120
         }";
 
         let oauth_config: RawFilterConfig = serde_json::from_str(text).unwrap();
-        assert!(matches!(oauth_config, RawFilterConfig::OAuth { .. }));
+        assert!(!oauth_config.is_oidc());
 
         let text = "
         {
@@ -506,6 +485,6 @@ mod tests {
         }";
 
         let oauth_config: RawFilterConfig = serde_json::from_str(text).unwrap();
-        assert!(matches!(oauth_config, RawFilterConfig::OIDC { .. }));
+        assert!(oauth_config.is_oidc());
     }
 }

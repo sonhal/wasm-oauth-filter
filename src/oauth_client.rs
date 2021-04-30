@@ -12,6 +12,8 @@ use crate::oauth_client_types::{Access, ClientError, Headers, Redirect, Request,
 use crate::session::{Session, SessionType, SessionUpdate};
 use crate::discovery::ProviderMetadata;
 use crate::config::{FilterConfig, ExtraConfig};
+use std::option::Option::Some;
+use jwt_simple::Error;
 
 
 pub static CALLBACK_PATH: &str = "/callback";
@@ -110,8 +112,14 @@ impl OAuthClient
                 let refresh_token = response.id_token.clone();
 
                 // validate id token
-
-
+                if let Some(id_token) = id_token.clone() {
+                    match self.config.validate_token(&id_token) {
+                        Ok(_) => {}
+                        Err(error) => {
+                            return Err(ClientError::new(500, error.to_string(), None))
+                        }
+                    }
+                }
                 let session = if let Some(session) = session {
                     session
                 } else {
