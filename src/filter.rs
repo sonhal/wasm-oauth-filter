@@ -9,7 +9,7 @@ mod session;
 mod util;
 
 use crate::cache::SharedCache;
-use crate::config::{ExtraConfig, FilterConfig, RawFilterConfig, BasicOAuth, RawOIDC};
+use crate::config::{ExtraConfig, FilterConfig, RawFilterConfig, RawOIDC};
 use crate::discovery::{ConfigError, JsonWebKeySet, ProviderMetadata};
 use crate::messages::{DownStreamResponse, ErrorBody, HttpRequest, TokenResponse};
 use crate::oauth_client::{ClientConfig, CALLBACK_PATH, SIGN_OUT_PATH, START_PATH};
@@ -55,26 +55,23 @@ struct OAuthRootContext {
     request_active: bool,
 }
 
-struct OAuthFilter<T>
-where
-    T: ExtraConfig,
+struct OAuthFilter
+
 {
-    config: FilterConfig<T>,
+    config: FilterConfig,
     oauth_client: crate::oauth_client::OAuthClient,
     cache: RefCell<SharedCache>,
 }
 
-impl<T> OAuthFilter<T>
-where
-    T: ExtraConfig,
+impl OAuthFilter
 {
-    fn new(config: FilterConfig<T>, cache: SharedCache) -> Result<OAuthFilter<T>, ParseError> {
+    fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
         log::debug!("Creating new HttpContext");
         log::debug!("Cache for HttpContext = {:?}", cache);
         log::debug!("Config for HttpContext = {:?}", config);
         let cache = RefCell::new(cache);
 
-        let oauth_client = crate::oauth_client::OAuthClient::new(config.client())?;
+        let oauth_client = crate::oauth_client::OAuthClient::new(config.clone())?;
         Ok(OAuthFilter {
             config,
             oauth_client,
@@ -167,9 +164,8 @@ enum FilterAction {
 
 // Implement http functions related to this request.
 // This is the core of the filter code.
-impl <T> HttpContext for OAuthFilter<T>
-where
-    T: ExtraConfig,
+impl HttpContext for OAuthFilter
+
 {
     // This callback will be invoked when request headers arrive
     fn on_http_request_headers(&mut self, _: usize) -> Action {
@@ -219,10 +215,7 @@ where
     }
 }
 
-impl <T> Context for OAuthFilter<T>
-where
-    T: ExtraConfig,
-{
+impl Context for OAuthFilter {
     fn on_http_call_response(
         &mut self,
         _token_id: u32,
@@ -434,7 +427,6 @@ impl RootContext for OAuthRootContext {
                         }
                     }
                 }
-
             }
         }
     }

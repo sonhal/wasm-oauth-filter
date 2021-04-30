@@ -11,6 +11,7 @@ use crate::messages::{DownStreamResponse, TokenResponse};
 use crate::oauth_client_types::{Access, ClientError, Headers, Redirect, Request, TokenRequest};
 use crate::session::{Session, SessionType, SessionUpdate};
 use crate::discovery::ProviderMetadata;
+use crate::config::{FilterConfig, ExtraConfig};
 
 
 pub static CALLBACK_PATH: &str = "/callback";
@@ -19,8 +20,9 @@ pub static SIGN_OUT_PATH: &str = "/sign_out";
 pub static CLIENT_PATHS: (&str, &str, &str) = (CALLBACK_PATH, START_PATH, SIGN_OUT_PATH);
 
 
-pub(crate) struct OAuthClient {
-    config: ClientConfig,
+pub(crate) struct OAuthClient
+{
+    config: FilterConfig,
     client: BasicClient,
 }
 
@@ -36,19 +38,14 @@ pub(crate) struct ClientConfig {
     cookie_expire: Duration,
 }
 
-impl OAuthClient {
+impl OAuthClient
+{
 
     pub fn new(
-        config: ClientConfig,
+        config: FilterConfig,
     ) -> Result<OAuthClient, ParseError> {
 
-        let client = BasicClient::new(
-            config.client_id.clone(),
-            Some(config.client_secret.clone()),
-            AuthUrl::from_url(config.authorization_url.clone()),
-            Some(TokenUrl::from_url(config.token_url.clone()))
-        )
-            .set_redirect_url(RedirectUrl::from_url(config.redirect_url.clone()));
+        let client = config.client();
 
         Ok(OAuthClient {
             config,
@@ -62,7 +59,7 @@ impl OAuthClient {
                 Err(ClientError::new(400, "No session to sign out from".to_string(), None))
             }
             Some(session) => {
-                let header = session.clear_cookie_header_tuple(&self.config.cookie_name);
+                let header = session.clear_cookie_header_tuple(self.config.cookie_name());
                 Ok((DownStreamResponse::new(vec![header], 200, "Signed Out".to_string()), session.end_session()))
             }
         }
@@ -73,7 +70,7 @@ impl OAuthClient {
         let (redirect_url, state, verifier) = self.authorization_server_redirect();
 
         let update = SessionUpdate::auth_request(self.valid_url(request.url()).to_string(), state, verifier);
-        let header = update.set_cookie_header_tuple(&self.config.cookie_name, self.config.cookie_expire);
+        let header = update.set_cookie_header_tuple(self.config.cookie_name(), self.config.cookie_expire());
         Ok((Redirect::new(redirect_url, vec![header]), update))
     }
 
@@ -111,6 +108,9 @@ impl OAuthClient {
                 let id_token = response.id_token.clone();
                 let expires_in = response.expires_in();
                 let refresh_token = response.id_token.clone();
+
+                // validate id token
+
 
                 let session = if let Some(session) = session {
                     session
@@ -160,48 +160,19 @@ impl OAuthClient {
         let verifier = util::new_random_verifier(32);
         let pkce_challenge =
             PkceCodeChallenge::from_code_verifier_sha256(&verifier);
-        let mut builder = self.client
-            .authorize_url(|| CsrfToken::new(util::new_random_verifier(32).secret().to_string()))
-            // Set the PKCE code challenge.
-            .set_pkce_challenge(pkce_challenge);
+        let (auth_url, csrf_token) =
+            self.config.authorization_url(
+                CsrfToken::new(util::new_random_verifier(32).secret().to_string()),
+                pkce_challenge
+            );
 
-        // Add extra parameters for Authorization redirect from configuration
-        for param in &self.config.extra_params {
-            builder = builder.add_extra_param(param.0.as_str(), param.1.as_str());
-        }
-
-        // Add configured scopes
-        for scope in &self.config.scopes {
-            builder = builder.add_scope(Scope::new(scope.clone()))
-        }
-
-
-        let (auth_url, csrf_token) = builder.url();
         let state = csrf_token.secret().clone();
 
         (auth_url, state, verifier.secret().to_string())
     }
 
     fn create_token_request(&self, code: String, code_verifier: Option<String>) -> HttpRequest {
-        let mut params = vec![("grant_type", "authorization_code"), ("code", code.as_str())];
-
-        // if we have a PKCE verifer we send it in the token request
-        let verifier_string;
-        if code_verifier.is_some() {
-            verifier_string = code_verifier.unwrap();
-            params.push(("code_verifier", verifier_string.as_str()))
-        }
-
-        util::token_request(
-            &AuthType::RequestBody,
-            &(self.config.client_id),
-            Some(&self.config.client_secret),
-            &[],
-            Some(&RedirectUrl::from_url(self.config.redirect_url.clone())),
-            None,
-            &TokenUrl::from_url(self.config.token_url.clone()),
-            params
-        )
+        self.config.token_request(code, code_verifier)
     }
 
     fn valid_url(&self, url: &Url) -> Url {
@@ -268,21 +239,26 @@ mod tests {
     use crate::session::{AuthorizationResponseVerifiers, AuthorizationTokens, Session, SessionType};
 
     use super::*;
-    use crate::config::{FilterConfig, BasicOAuth};
+    use crate::config::{FilterConfig};
     use time::NumericalDuration;
 
-    fn test_config() -> ClientConfig {
+    fn test_config_extra(scopes: Vec<String>) -> FilterConfig {
         FilterConfig::oauth(
             "sessioncookie",
             "cluster",
             "issuer",
+            &"https://redirect".parse().unwrap(),
             &"https://authorization".parse().unwrap(),
             &"https://token".parse().unwrap(),
             "myclient",
             "mysecret",
-            vec!["openid".to_string()],
+            scopes,
             1.hours(),
-            vec![]).client()
+            vec![])
+    }
+
+    fn test_config() -> FilterConfig {
+        test_config_extra(vec!["openid".to_string()])
     }
 
     fn test_client() -> crate::oauth_client::OAuthClient {
@@ -385,7 +361,8 @@ mod tests {
         let result = client.start(request);
         assert!(result.is_ok());
         let (redirect, update) = result.unwrap();
-        assert_eq!(redirect.url().origin(), client.config.authorization_url.origin());
+        let expected = Url::parse("https://authorization").unwrap().origin();
+        assert_eq!(redirect.url().origin(), expected);
         // The session we are storing should be an AuthorizationRequest
         assert!(matches!(update.create_session().data, SessionType::AuthorizationRequest(..)));
     }
@@ -400,10 +377,10 @@ mod tests {
         assert!(result.is_ok());
 
         let result = result.unwrap();
-        assert_eq!(result.clone().url().clone(), client.config.token_url);
+        assert_eq!(result.clone().url().clone(), Url::parse("https://token").unwrap());
         // The body of the token request should contain the client id and secret
-        assert!(String::from_utf8(result.clone().body().to_vec()).unwrap().contains(&client.config.client_secret.secret().to_ascii_lowercase()));
-        assert!(String::from_utf8(result.clone().body().to_vec()).unwrap().contains(&client.config.client_id.to_ascii_lowercase()));
+        assert!(String::from_utf8(result.clone().body().to_vec()).unwrap().contains(&client.config.client_secret()));
+        assert!(String::from_utf8(result.clone().body().to_vec()).unwrap().contains(&client.config.client_id()));
     }
 
 
@@ -445,11 +422,8 @@ mod tests {
         let scopes = vec!["openid".to_string(),
                           "email".to_string(),
                           "profile".to_string()];
-        let config = test_config();
-        let config = ClientConfig {
-            scopes: scopes.clone(),
-            ..config
-        };
+        let config = test_config_extra(scopes.clone());
+
 
         let client = crate::oauth_client::OAuthClient::new(config).unwrap();
         let request = test_request();

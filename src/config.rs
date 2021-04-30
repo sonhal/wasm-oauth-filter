@@ -1,5 +1,5 @@
 use crate::discovery::{JsonWebKeySet, ProviderMetadata};
-use crate::oauth_client::ClientConfig;
+use crate::oauth_client::{ClientConfig, CALLBACK_PATH};
 use jwt_simple::claims::{JWTClaims, NoCustomClaims};
 use jwt_simple::prelude::{RSAPublicKeyLike, VerificationOptions};
 use jwt_simple::{Error, JWTError};
@@ -7,19 +7,24 @@ use serde::{Deserialize, Serialize};
 use std::fmt::Debug;
 use time::Duration;
 use url::Url;
+use oauth2::basic::{BasicClient, BasicErrorResponse, BasicTokenResponse, BasicTokenType};
+use oauth2::{AuthUrl, TokenUrl, RedirectUrl, Client, CsrfToken, PkceCodeChallenge, Scope, AuthorizationRequest, ClientId, ClientSecret, AuthType, HttpRequest};
+use crate::discovery::ConfigError::BadState;
+use crate::util;
 
-pub trait ExtraConfig: Debug {
-    fn validate_token(&self, token: &str) -> Result<(), Error>;
-}
+//
+// pub trait ExtraConfig: Debug + Clone {
+//     fn validate_token(&self, token: &str) -> Result<(), Error>;
+//     fn authorization_url(builder: AuthorizationRequest) -> AuthorizationRequest;
+// }
 
 #[derive(Clone, Debug)]
-pub struct FilterConfig<T>
-where
-    T: ExtraConfig,
+pub struct FilterConfig
 {
     cookie_name: String,
     auth_cluster: String,
     issuer: String,
+    redirect_uri: Url,
     auth_uri: Url,
     token_uri: Url,
     client_id: String,
@@ -27,17 +32,15 @@ where
     scopes: Vec<String>,
     cookie_expire: Duration,
     extra_authorization_params: Vec<(String, String)>,
-    extra: T,
+    extra: ExtraConfig,
 }
 
-impl<T> FilterConfig<T>
-where
-    T: ExtraConfig,
-{
+impl FilterConfig {
     pub fn new(
         cookie_name: &str,
         auth_cluster: &str,
         issuer: &str,
+        redirect_uri: &Url,
         auth_uri: &Url,
         token_uri: &Url,
         client_id: &str,
@@ -45,12 +48,13 @@ where
         scopes: Vec<String>,
         cookie_expire: Duration,
         extra_authorization_params: Vec<(String, String)>,
-        extra: T,
-    ) -> FilterConfig<T> {
+        extra: ExtraConfig,
+    ) -> FilterConfig {
         FilterConfig {
             cookie_name: cookie_name.to_string(),
             auth_cluster: auth_cluster.to_string(),
             issuer: issuer.to_string(),
+            redirect_uri: redirect_uri.clone(),
             auth_uri: auth_uri.clone(),
             token_uri: token_uri.clone(),
             client_id: client_id.to_string(),
@@ -63,28 +67,48 @@ where
     }
 
     pub fn validate_token(&self, token: &str) -> Result<(), Error> {
-        self.extra.validate_token(token)
+        self.extra.validate_id_token(token, None)
     }
 
     pub fn cookie_name(&self) -> &str {
         &self.cookie_name
     }
 
+
+    pub fn cookie_expire(&self) -> &Duration {
+        &self.cookie_expire
+    }
+
     pub fn auth_cluster(&self) -> &str {
         &self.auth_cluster
     }
 
-    // Stub to be removed after integration
-    pub(crate) fn client(&self) -> ClientConfig {
-        ClientConfig::new("", "", "", "", "", "", vec![], vec![], 0)
+    pub fn client_id(&self) -> &str {
+        &self.client_id
     }
+
+    pub fn client_secret(&self) -> &str {
+        &self.client_secret
+    }
+
+    pub fn client(&self) -> Client<BasicErrorResponse, BasicTokenResponse, BasicTokenType> {
+        BasicClient::new(
+            ClientId::new(self.client_id.clone()),
+            Some(ClientSecret::new(self.client_secret.clone())),
+            AuthUrl::from_url(self.auth_uri.clone()),
+            Some(TokenUrl::from_url(self.token_uri.clone()))
+        )
+            .set_redirect_url(RedirectUrl::from_url(self.redirect_uri.clone()))
+    }
+
 }
 
-impl FilterConfig<BasicOAuth> {
+impl FilterConfig {
     pub fn oauth(
         cookie_name: &str,
         auth_cluster: &str,
         issuer: &str,
+        redirect_uri: &Url,
         auth_uri: &Url,
         token_uri: &Url,
         client_id: &str,
@@ -92,11 +116,12 @@ impl FilterConfig<BasicOAuth> {
         scopes: Vec<String>,
         cookie_expire: Duration,
         extra_authorization_params: Vec<(String, String)>,
-    ) -> FilterConfig<BasicOAuth> {
+    ) -> FilterConfig {
         FilterConfig::new(
             cookie_name,
             auth_cluster,
             issuer,
+            redirect_uri,
             auth_uri,
             token_uri,
             client_id,
@@ -104,15 +129,16 @@ impl FilterConfig<BasicOAuth> {
             scopes,
             cookie_expire,
             extra_authorization_params,
-            BasicOAuth {},
+             ExtraConfig::BasicOAuth,
         )
     }
 }
 
-impl FilterConfig<OIDC> {
+impl FilterConfig {
     pub fn oidc(
         cookie_name: &str,
         auth_cluster: &str,
+        redirect_uri: &Url,
         client_id: &str,
         client_secret: &str,
         scopes: Vec<String>,
@@ -120,11 +146,12 @@ impl FilterConfig<OIDC> {
         extra_authorization_params: Vec<(String, String)>,
         jwks: JsonWebKeySet,
         provider_metadata: ProviderMetadata,
-    ) -> FilterConfig<OIDC> {
+    ) -> FilterConfig {
         FilterConfig {
             cookie_name: cookie_name.to_string(),
             auth_cluster: auth_cluster.to_string(),
             issuer: provider_metadata.issuer().to_string(),
+            redirect_uri: redirect_uri.clone(),
             auth_uri: provider_metadata.authorization_endpoint().clone(),
             token_uri: provider_metadata.token_endpoint().clone().unwrap(), // TODO FIX
             client_id: client_id.to_string(),
@@ -132,35 +159,69 @@ impl FilterConfig<OIDC> {
             scopes,
             cookie_expire,
             extra_authorization_params,
-            extra: OIDC {
+            extra: ExtraConfig::OIDC {
                 jwks,
                 provider_metadata,
             },
         }
     }
-}
 
-#[derive(Clone, Debug)]
-pub struct BasicOAuth {}
+    pub fn authorization_url(&self, state: CsrfToken, pkce_challenge: PkceCodeChallenge) -> (Url, CsrfToken) {
+        let mut builder = self.client();
+        let mut builder = builder
+            .authorize_url(|| state)
+            // Set the PKCE code challenge.
+            .set_pkce_challenge(pkce_challenge);
 
-impl ExtraConfig for BasicOAuth {
-    // Clients dont validate tokens in basic OAuth
-    fn validate_token(&self, _token: &str) -> Result<(), Error> {
-        Ok(())
+        // Add extra parameters for Authorization redirect from configuration
+        for param in &self.extra_authorization_params {
+            builder = builder.add_extra_param(param.0.as_str(), param.1.as_str());
+        }
+
+        // Add configured scopes
+        for scope in &self.scopes {
+            builder = builder.add_scope(Scope::new(scope.clone()))
+        }
+        builder.url()
+    }
+
+    pub fn token_request(&self, code: String, code_verifier: Option<String>) -> HttpRequest {
+        let mut params = vec![("grant_type", "authorization_code"), ("code", code.as_str())];
+
+        // if we have a PKCE verifer we send it in the token request
+        let verifier_string;
+        if code_verifier.is_some() {
+            verifier_string = code_verifier.unwrap();
+            params.push(("code_verifier", verifier_string.as_str()))
+        }
+
+        util::token_request(
+            &AuthType::RequestBody,
+            &ClientId::new(self.client_id().to_string()),
+            Some(&ClientSecret::new(self.client_secret().to_string())),
+            &[],
+            Some(&RedirectUrl::from_url(self.redirect_uri.clone())),
+            None,
+            &TokenUrl::from_url(self.token_uri.clone()),
+            params
+        )
     }
 }
 
 #[derive(Clone, Debug)]
-pub struct OIDC {
-    jwks: JsonWebKeySet,
-    provider_metadata: ProviderMetadata,
+pub enum ExtraConfig {
+    BasicOAuth,
+    OIDC {
+        jwks: JsonWebKeySet,
+        provider_metadata: ProviderMetadata,
+    }
 }
 
-impl OIDC {
+impl ExtraConfig {
     // Validates OIDC token according to OpenID Connect Core 1.0
-    fn validate(&self, token: &str, options: Option<VerificationOptions>) -> Result<(), Error> {
+    fn validate(&self, token: &str, jwks: &JsonWebKeySet, options: Option<VerificationOptions>) -> Result<(), Error> {
         let mut errors = vec![];
-        for key in self.jwks.keys().iter() {
+        for key in jwks.keys().iter() {
             match key.verify_token::<NoCustomClaims>(token, options.clone()) {
                 Ok(claims) => return Ok(()),
                 Err(error) => errors.push(error),
@@ -168,11 +229,14 @@ impl OIDC {
         }
         Err(errors.pop().unwrap()) // TODO FIX
     }
-}
 
-impl ExtraConfig for OIDC {
-    fn validate_token(&self, token: &str) -> Result<(), Error> {
-        self.validate(token, None)
+    pub fn validate_id_token(&self, token: &str, options: Option<VerificationOptions>) -> Result<(), Error> {
+        match self {
+            ExtraConfig::BasicOAuth => Err(Error::new(BadState("Asked to validate ID token, but configured for OAuth".to_string()))),
+            ExtraConfig::OIDC { jwks, .. } => {
+               self.validate(token, jwks, options)
+            }
+        }
     }
 }
 
@@ -209,6 +273,8 @@ pub struct RawOAuth {
 
 #[derive(Deserialize, Clone, Debug)]
 pub struct RawOIDC {
+    #[serde(default = "default_redirect_uri")]
+    redirect_uri: String,
     #[serde(default = "default_oidc_cookie_name")]
     cookie_name: String,
     auth_cluster: String,
@@ -234,11 +300,12 @@ impl RawFilterConfig {
 
 impl RawOAuth {
     // Convert Raw config to filter config with rich types
-    pub fn filter_config(&self) -> Result<FilterConfig<BasicOAuth>, Error> {
+    pub fn filter_config(&self) -> Result<FilterConfig, Error> {
         Ok(FilterConfig::oauth(
             &self.cookie_name,
             &self.auth_cluster,
             &self.issuer,
+            &self.redirect_uri.parse().unwrap(),
             &self.auth_uri.parse().unwrap(),  // TODO FIX
             &self.token_uri.parse().unwrap(), // TODO FIX
             &self.client_id,
@@ -256,10 +323,11 @@ impl RawOAuth {
 
 impl RawOIDC {
     // Convert Raw config to filter config with rich types and completed discovery
-    pub fn filter_config(&self, provider_metadata: &ProviderMetadata , jwks: &JsonWebKeySet) -> Result<FilterConfig<OIDC>, Error> {
+    pub fn filter_config(&self, provider_metadata: &ProviderMetadata , jwks: &JsonWebKeySet) -> Result<FilterConfig, Error> {
         Ok(FilterConfig::oidc(
             &self.cookie_name,
             &self.auth_cluster,
+            &self.redirect_uri.parse().unwrap(), // TODD FIX
             &self.client_id,
             &self.client_secret,
             self.scopes.clone(),
@@ -305,7 +373,7 @@ fn default_cookie_expire() -> u64 {
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{BasicOAuth, FilterConfig, RawFilterConfig, OIDC};
+    use crate::config::{FilterConfig, RawFilterConfig};
     use crate::discovery::{JsonWebKeySet, ProviderMetadata};
     use jwt_simple::prelude;
     use jwt_simple::prelude::{Audiences, VerificationOptions};
@@ -319,8 +387,9 @@ mod tests {
             "cookiename",
             "some_cluster",
             "test_issuer",
-            &"https://localhost/auth".parse().unwrap(),
-            &"https://localhost/token".parse().unwrap(),
+            &"https://localhost/callback".parse().unwrap(),
+            &"https://issuer/auth".parse().unwrap(),
+            &"https://issuer/token".parse().unwrap(),
             "clientid",
             "clientsecret",
             vec![],
@@ -331,6 +400,7 @@ mod tests {
         let oidc_config = FilterConfig::oidc(
             "cookiename",
             "some_cluster",
+            &"https://localhost/callback".parse().unwrap(),
             "clientid",
             "clientsecret",
             vec![],
@@ -339,10 +409,10 @@ mod tests {
             JsonWebKeySet::new(vec![]),
             ProviderMetadata::new(
                 "https://localhost/".parse().unwrap(),
-                "https://localhost/auth".parse().unwrap(),
-                Some("https://localhost/token".parse().unwrap()),
-                Some("https://localhost/userinfo".parse().unwrap()),
-                "https://localhost/jwks".parse().unwrap(),
+                "https://issuer/auth".parse().unwrap(),
+                Some("https://issuer/token".parse().unwrap()),
+                Some("https://issuer/userinfo".parse().unwrap()),
+                "https://issuer/jwks".parse().unwrap(),
                 None,
                 vec!["code".to_string()],
                 vec!["public".to_string()],
@@ -369,6 +439,7 @@ mod tests {
         let oidc_config = FilterConfig::oidc(
             "cookiename",
             "some_cluster",
+            &"https://localhost/callback".parse().unwrap(),
             "clientid",
             "clientsecret",
             vec![],
@@ -377,10 +448,10 @@ mod tests {
             JsonWebKeySet::from_bytes(body).unwrap(),
             ProviderMetadata::new(
                 "https://localhost/".parse().unwrap(),
-                "https://localhost/auth".parse().unwrap(),
-                Some("https://localhost/token".parse().unwrap()),
-                Some("https://localhost/userinfo".parse().unwrap()),
-                "https://localhost/jwks".parse().unwrap(),
+                "https://issuer/auth".parse().unwrap(),
+                Some("https://issuer/token".parse().unwrap()),
+                Some("https://issuer/userinfo".parse().unwrap()),
+                "https://issuer/jwks".parse().unwrap(),
                 None,
                 vec!["code".to_string()],
                 vec!["public".to_string()],
@@ -401,7 +472,8 @@ mod tests {
             time_tolerance: Some(jwt_simple::prelude::Duration::from_days(10_000)), // TODO, will fail someday in the future :P
             max_validity: None,
         };
-        let result = oidc_config.extra.validate(RAW_ID_TOKEN, Some(options));
+        let result = oidc_config.extra.validate_id_token(RAW_ID_TOKEN, Some(options));
+        println!("{:?}", result);
         assert!(result.is_ok())
     }
 

@@ -144,7 +144,7 @@ impl Session {
         headers
     }
 
-    pub fn clear_cookie_header_tuple(&self, name: &String) -> (String, String) {
+    pub fn clear_cookie_header_tuple(&self, name: &str) -> (String, String) {
         let cookie = CookieBuilder::new(
             name, "")
             .secure(true)
@@ -186,23 +186,23 @@ impl SessionUpdate {
         }
     }
 
-    pub fn set_cookie_header(&self, name: &String, expires: Duration) -> HeaderMap {
+    pub fn set_cookie_header(&self, name: &str, expires: &Duration) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(SET_COOKIE, self.cookie(name, expires).parse().unwrap());
         headers
     }
 
-    pub fn set_cookie_header_tuple(&self, name: &String, expires: Duration) -> (String, String) {
+    pub fn set_cookie_header_tuple(&self, name: &str, expires: &Duration) -> (String, String) {
         (SET_COOKIE.to_string(), self.cookie(name, expires))
     }
 
-    pub fn cookie(&self, name: &String, expires: Duration) -> String {
+    pub fn cookie(&self, name: &str, expires: &Duration) -> String {
         CookieBuilder::new(
             name,
             &self.id)
             .secure(true)
             .http_only(true)
-            .max_age(expires)
+            .max_age(expires.clone())
             .finish().to_string()
     }
 
