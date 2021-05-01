@@ -1,17 +1,19 @@
+use crate::discovery::ConfigError::BadState;
 use crate::discovery::{JsonWebKeySet, ProviderMetadata};
+use crate::util;
 use jwt_simple::claims::NoCustomClaims;
-use jwt_simple::prelude::{RSAPublicKeyLike, VerificationOptions, Claims, JWTClaims};
+use jwt_simple::prelude::{Claims, JWTClaims, RSAPublicKeyLike, VerificationOptions};
 use jwt_simple::Error;
+use oauth2::basic::{BasicClient, BasicErrorResponse, BasicTokenResponse, BasicTokenType};
+use oauth2::{
+    AuthType, AuthUrl, Client, ClientId, ClientSecret, CsrfToken, HttpRequest, PkceCodeChallenge,
+    RedirectUrl, Scope, TokenUrl,
+};
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fmt::Debug;
 use time::Duration;
 use url::Url;
-use oauth2::basic::{BasicClient, BasicErrorResponse, BasicTokenResponse, BasicTokenType};
-use oauth2::{AuthUrl, TokenUrl, RedirectUrl, Client, CsrfToken, PkceCodeChallenge, Scope, ClientId, ClientSecret, AuthType, HttpRequest};
-use crate::discovery::ConfigError::BadState;
-use crate::util;
-use std::collections::HashSet;
-
 
 //
 // pub trait ExtraConfig: Debug + Clone {
@@ -20,8 +22,7 @@ use std::collections::HashSet;
 // }
 
 #[derive(Clone, Debug)]
-pub struct FilterConfig
-{
+pub struct FilterConfig {
     cookie_name: String,
     auth_cluster: String,
     issuer: String,
@@ -67,8 +68,7 @@ impl FilterConfig {
         }
     }
 
-    pub fn validate_token(&self, token: &str) ->
-                                              Result<(), Error> {
+    pub fn validate_token(&self, token: &str) -> Result<(), Error> {
         let allowed_issuers: HashSet<String> =
             vec![&self.issuer].iter().map(|s| s.to_string()).collect();
 
@@ -76,7 +76,7 @@ impl FilterConfig {
         let mut allowed_audiences = allowed_issuers.clone();
         allowed_audiences.insert(self.client_id.clone());
 
-        let option =  VerificationOptions {
+        let option = VerificationOptions {
             reject_before: None,
             accept_future: false,
             required_subject: None,
@@ -86,7 +86,7 @@ impl FilterConfig {
             allowed_issuers: Some(allowed_issuers),
             allowed_audiences: Some(allowed_audiences),
             time_tolerance: None,
-            max_validity: None
+            max_validity: None,
         };
         let _ = self.extra.validate_id_token(token, None)?;
         Ok(())
@@ -95,7 +95,6 @@ impl FilterConfig {
     pub fn cookie_name(&self) -> &str {
         &self.cookie_name
     }
-
 
     pub fn cookie_expire(&self) -> &Duration {
         &self.cookie_expire
@@ -118,11 +117,10 @@ impl FilterConfig {
             ClientId::new(self.client_id.clone()),
             Some(ClientSecret::new(self.client_secret.clone())),
             AuthUrl::from_url(self.auth_uri.clone()),
-            Some(TokenUrl::from_url(self.token_uri.clone()))
+            Some(TokenUrl::from_url(self.token_uri.clone())),
         )
-            .set_redirect_url(RedirectUrl::from_url(self.redirect_uri.clone()))
+        .set_redirect_url(RedirectUrl::from_url(self.redirect_uri.clone()))
     }
-
 }
 
 impl FilterConfig {
@@ -151,7 +149,7 @@ impl FilterConfig {
             scopes,
             cookie_expire,
             extra_authorization_params,
-             ExtraConfig::BasicOAuth,
+            ExtraConfig::BasicOAuth,
         )
     }
 }
@@ -177,8 +175,16 @@ impl FilterConfig {
             auth_cluster: auth_cluster.to_string(),
             issuer: issuer.to_string(),
             redirect_uri: redirect_uri.clone(),
-            auth_uri: auth_uri.as_ref().map_or(provider_metadata.authorization_endpoint().clone(), |url| url.clone()),
-            token_uri:  token_uri.as_ref().map_or(provider_metadata.token_endpoint().clone().unwrap(), |url| url.clone()), // TODO FIX
+            auth_uri: auth_uri
+                .as_ref()
+                .map_or(provider_metadata.authorization_endpoint().clone(), |url| {
+                    url.clone()
+                }),
+            token_uri: token_uri
+                .as_ref()
+                .map_or(provider_metadata.token_endpoint().clone().unwrap(), |url| {
+                    url.clone()
+                }), // TODO FIX
             client_id: client_id.to_string(),
             client_secret: client_secret.to_string(),
             scopes,
@@ -191,10 +197,13 @@ impl FilterConfig {
         }
     }
 
-    pub fn authorization_url(&self, state: CsrfToken, pkce_challenge: PkceCodeChallenge) -> (Url, CsrfToken) {
+    pub fn authorization_url(
+        &self,
+        pkce_challenge: PkceCodeChallenge,
+    ) -> (Url, CsrfToken) {
         let builder = self.client();
         let mut builder = builder
-            .authorize_url(|| state)
+            .authorize_url(|| CsrfToken::new(util::new_random_verifier(32).secret().to_string()))
             // Set the PKCE code challenge.
             .set_pkce_challenge(pkce_challenge);
 
@@ -207,11 +216,15 @@ impl FilterConfig {
         for scope in &self.scopes {
             builder = builder.add_scope(Scope::new(scope.clone()))
         }
+
         builder.url()
     }
 
     pub fn token_request(&self, code: String, code_verifier: Option<String>) -> HttpRequest {
-        let mut params = vec![("grant_type", "authorization_code"), ("code", code.as_str())];
+        let mut params = vec![
+            ("grant_type", "authorization_code"),
+            ("code", code.as_str()),
+        ];
 
         // if we have a PKCE verifer we send it in the token request
         let verifier_string;
@@ -228,7 +241,7 @@ impl FilterConfig {
             Some(&RedirectUrl::from_url(self.redirect_uri.clone())),
             None,
             &TokenUrl::from_url(self.token_uri.clone()),
-            params
+            params,
         )
     }
 }
@@ -239,32 +252,39 @@ pub enum ExtraConfig {
     OIDC {
         jwks: JsonWebKeySet,
         provider_metadata: ProviderMetadata,
-    }
+    },
 }
 
 impl ExtraConfig {
     // Validates OIDC token according to OpenID Connect Core 1.0
-    fn validate(&self, token: &str, jwks: &JsonWebKeySet, options: Option<VerificationOptions>) -> Result<JWTClaims<NoCustomClaims>, Error> {
+    fn validate(
+        &self,
+        token: &str,
+        jwks: &JsonWebKeySet,
+        options: Option<VerificationOptions>,
+    ) -> Result<JWTClaims<NoCustomClaims>, Error> {
         log::debug!("validating id token = {}", token);
         let mut errors = vec![];
         for key in jwks.keys().iter() {
             match key.verify_token::<NoCustomClaims>(token, options.clone()) {
-                Ok(claims) => {
-                    return Ok(claims)
-                },
+                Ok(claims) => return Ok(claims),
                 Err(error) => errors.push(error),
             }
         }
-        log::error!("ERROR not valid token = {}, errors = {:?}", token, errors );
+        log::error!("ERROR not valid token = {}, errors = {:?}", token, errors);
         Err(errors.pop().unwrap()) // TODO FIX
     }
 
-    pub fn validate_id_token(&self, token: &str, options: Option<VerificationOptions>) -> Result<JWTClaims<NoCustomClaims>, Error> {
+    pub fn validate_id_token(
+        &self,
+        token: &str,
+        options: Option<VerificationOptions>,
+    ) -> Result<JWTClaims<NoCustomClaims>, Error> {
         match self {
-            ExtraConfig::BasicOAuth => Err(Error::new(BadState("Asked to validate ID token, but configured for OAuth".to_string()))),
-            ExtraConfig::OIDC { jwks, .. } => {
-               self.validate(token, jwks, options)
-            }
+            ExtraConfig::BasicOAuth => Err(Error::new(BadState(
+                "Asked to validate ID token, but configured for OAuth".to_string(),
+            ))),
+            ExtraConfig::OIDC { jwks, .. } => self.validate(token, jwks, options),
         }
     }
 }
@@ -301,7 +321,7 @@ impl RawFilterConfig {
             &self.auth_cluster,
             &self.issuer,
             &self.redirect_uri.parse().unwrap(),
-            &self.auth_uri.as_ref().unwrap().parse().unwrap(),  // TODO FIX
+            &self.auth_uri.as_ref().unwrap().parse().unwrap(), // TODO FIX
             &self.token_uri.as_ref().unwrap().parse().unwrap(), // TODO FIX
             &self.client_id,
             &self.client_secret,
@@ -312,7 +332,11 @@ impl RawFilterConfig {
     }
 
     // Convert Raw config to filter config with rich types and completed discovery
-    pub fn oidc_config(&self, provider_metadata: &ProviderMetadata , jwks: &JsonWebKeySet) -> Result<FilterConfig, Error> {
+    pub fn oidc_config(
+        &self,
+        provider_metadata: &ProviderMetadata,
+        jwks: &JsonWebKeySet,
+    ) -> Result<FilterConfig, Error> {
         Ok(FilterConfig::oidc(
             &self.cookie_name,
             &self.auth_cluster,
@@ -342,7 +366,6 @@ impl RawFilterConfig {
         &self.issuer
     }
 }
-
 
 fn default_redirect_uri() -> String {
     "{proto}://{authority}{path}".to_owned()
@@ -473,7 +496,9 @@ mod tests {
             time_tolerance: Some(jwt_simple::prelude::Duration::from_days(10_000)), // TODO, will fail someday in the future :P
             max_validity: None,
         };
-        let result = oidc_config.extra.validate_id_token(RAW_ID_TOKEN, Some(options));
+        let result = oidc_config
+            .extra
+            .validate_id_token(RAW_ID_TOKEN, Some(options));
         assert!(result.is_ok())
     }
 

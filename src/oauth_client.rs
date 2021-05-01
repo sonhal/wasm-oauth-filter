@@ -166,10 +166,7 @@ impl OAuthClient
         let pkce_challenge =
             PkceCodeChallenge::from_code_verifier_sha256(&verifier);
         let (auth_url, csrf_token) =
-            self.config.authorization_url(
-                CsrfToken::new(util::new_random_verifier(32).secret().to_string()),
-                pkce_challenge
-            );
+            self.config.authorization_url(pkce_challenge);
 
         let state = csrf_token.secret().clone();
 
