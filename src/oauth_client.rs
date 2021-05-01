@@ -1,6 +1,6 @@
 use std::any::Any;
 
-use oauth2::{ClientId, ClientSecret, CsrfToken, HttpRequest, PkceCodeChallenge};
+use oauth2::{ClientId, ClientSecret, HttpRequest, PkceCodeChallenge};
 use oauth2::basic::BasicClient;
 use time::Duration;
 use url::{Url, ParseError};
@@ -266,12 +266,9 @@ mod tests {
 
     use super::*;
     use crate::config::{FilterConfig};
-    use time::{NumericalDuration, NumericalStdDurationShort};
     use crate::discovery::{JsonWebKeySet, ProviderMetadata};
-    use jsonwebkey::{JsonWebKey, Key, RsaPublic, PublicExponent, ByteVec};
-    use jwt_simple::prelude::{RS256PublicKey, RS256KeyPair, RSAKeyPairLike, JWTClaims, Claims};
-    use jwt_simple::claims::NoCustomClaims;
-    use jsonwebkey::Algorithm::RS256;
+    use jsonwebkey::{Key, RsaPublic, PublicExponent, ByteVec};
+    use jwt_simple::prelude::{RS256KeyPair, RSAKeyPairLike, Claims};
 
     fn test_config_extra(scopes: Vec<String>) -> FilterConfig {
         FilterConfig::oauth(
@@ -369,12 +366,17 @@ mod tests {
     }
 
     fn test_request() -> Request {
-        Request::new( vec![
+        match Request::new( vec![
             ("random_header".to_string(), "value".to_string()),
             ("x-forwarded-proto".to_string(), "http".to_string()),
             (":authority".to_string(), "localhost".to_string()),
             (":path".to_string(), "/test-path".to_string())
-        ]).unwrap()
+        ]) {
+            Ok(request) => request,
+            Err(e) => {
+                panic!("Unable to generate generate oauth test request: {:?}", e)
+            },
+        }
     }
 
     fn test_callback_request() -> Request {
@@ -403,7 +405,7 @@ mod tests {
     }
 
     fn test_successful_token_response(keypair: RS256KeyPair, ) -> TokenResponse {
-        let mut claims =
+        let claims =
             Claims::create(jwt_simple::prelude::Duration::from_hours(1));
         let claims = claims.with_issuer("https://issuer")
             .with_audience("myclient");

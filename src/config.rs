@@ -2,7 +2,7 @@ use crate::discovery::ConfigError::BadState;
 use crate::discovery::{JsonWebKeySet, ProviderMetadata};
 use crate::util;
 use jwt_simple::claims::NoCustomClaims;
-use jwt_simple::prelude::{Claims, JWTClaims, RSAPublicKeyLike, VerificationOptions};
+use jwt_simple::prelude::{JWTClaims, RSAPublicKeyLike, VerificationOptions};
 use jwt_simple::Error;
 use oauth2::basic::{BasicClient, BasicErrorResponse, BasicTokenResponse, BasicTokenType};
 use oauth2::{
