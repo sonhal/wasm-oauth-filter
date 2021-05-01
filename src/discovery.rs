@@ -77,7 +77,7 @@ impl ProviderMetadata {
         }
     }
 
-    pub fn from_bytes(bytes: Vec<u8>) -> Result<ProviderMetadata, ConfigError> {
+    pub fn from_bytes(bytes: &Vec<u8>) -> Result<ProviderMetadata, ConfigError> {
         serde_json::from_slice::<ProviderMetadata>(bytes.as_slice())
             .map_err(|err| {
                 ConfigError::Parse(err.to_string())

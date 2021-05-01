@@ -1,6 +1,6 @@
 use std::time::{SystemTime, SystemTimeError};
 use serde::{Serialize, Deserialize};
-use oauth2::http::{HeaderMap, HeaderValue};
+use oauth2::http::HeaderMap;
 use oauth2::http::header::{AUTHORIZATION, SET_COOKIE};
 use cookie::CookieBuilder;
 use crate::util;

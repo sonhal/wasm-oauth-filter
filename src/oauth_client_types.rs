@@ -14,7 +14,7 @@ pub struct Request {
 
 impl Request {
     pub(crate) fn new(headers: Headers) -> Result<Self, ClientError> {
-        let url = Self::request_url(headers.clone())?;
+        let url = Self::request_url(&headers)?;
         Ok(Request { headers, url })
     }
 
@@ -39,17 +39,36 @@ impl Request {
         None
     }
 
-    fn request_url(headers: Headers) -> Result<Url, ClientError> {
-        let path =
-            headers.iter().find(|(name, _)| { *name == ":path" }).map(|entry| { entry.1.clone() });
-        let host_url = Self::host_url(headers)?;
-        host_url.join(path.as_ref().unwrap_or(&"".to_string()).as_str())
-            .map_err(|err| {
-                ClientError::new(500, format!("Could not create URL from base={}, and path={}", host_url, path.unwrap_or_default()),None )
-            })
+    fn request_url(headers: &Headers) -> Result<Url, ClientError> {
+        let path_header = ":path";
+         match headers
+            .iter()
+            .find(|(name, _)| { name == path_header })
+            .map(|(_, value)| { value.clone() }) {
+                 Some(path) => {
+                     let host_url = Self::host_url(headers)?;
+                     match host_url.join(path.as_str()) {
+                         Err(err) => {
+                             Err(ClientError::new(
+                                 500,
+                                 format!("Could not create URL from base={}, and path={}", host_url, path),
+                                 None
+                             ))
+                         }
+                         Ok(url) => Ok(url),
+                     }
+                 },
+                 _ => {
+                     Err(ClientError::new(
+                        500,
+                         format!("Unable to find header '{}' when looking for request URL in headers", path_header),
+                         None,
+                     ))
+                 },
+        }
     }
 
-    fn host_url(headers: Headers) -> Result<Url, ClientError> {
+    fn host_url(headers: &Headers) -> Result<Url, ClientError> {
         let scheme =
             headers.iter().find(|(name, _)| { *name == "x-forwarded-proto" }).map(|entry| { entry.1.clone() });
         let authority =

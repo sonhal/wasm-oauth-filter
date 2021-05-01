@@ -290,37 +290,37 @@ impl Context for OAuthRootContext {
         };
 
         if self.provider_metadata.is_none() {
-            match ProviderMetadata::from_bytes(bytes) {
+            match ProviderMetadata::from_bytes(&bytes) {
+                Err(err) => {
+                    log::error!("ERROR parsing ProviderMetadata = {}", err);
+                    panic!("Invalid ProviderMetadata response") // Crash hard here as we cannot serve requests
+                },
                 Ok(provider_metadata) => {
                     self.provider_metadata = Some(provider_metadata);
-                    let request =
-                        discovery::jwks_request(self.provider_metadata.clone().unwrap().jwks_url());
+                    let request = discovery::jwks_request(self.provider_metadata.clone().unwrap().jwks_url());
                     match self.dispatch(request) {
                         Ok(_) => {
                             log::debug!("successfully dispatched JWKS request")
-                        }
+                        },
                         Err(err) => {
                             log::error!("Failed to JWKS request, Envoy status = {:?}", err)
-                        }
+                        },
                     }
                     log::debug!("Provider Metadata configured: {:?}", self.provider_metadata)
-                }
-                Err(error) => {
-                    log::error!("ERROR parsing ProviderMetadata = {}", error);
-                    panic!("Invalid ProviderMetadata response") // Crash hard here as we cannot serve requests
-                }
+                },
             }
-        } else {
-            match JsonWebKeySet::from_bytes(bytes) {
-                Ok(jwks) => {
-                    self.jwks = Some(jwks);
-                    log::debug!("JWKS configured: {:?}", self.jwks);
-                    self.stop_discovery();
-                }
-                Err(error) => {
-                    log::error!("ERROR parsing JsonWebKeySet = {}", error);
-                    panic!("Invalid JWKS response body");
-                }
+            return;
+        }
+
+        match JsonWebKeySet::from_bytes(bytes) {
+            Ok(jwks) => {
+                self.jwks = Some(jwks);
+                log::debug!("JWKS configured: {:?}", self.jwks);
+                self.stop_discovery();
+            }
+            Err(error) => {
+                log::error!("ERROR parsing JsonWebKeySet = {}", error);
+                panic!("Invalid JWKS response body");
             }
         }
     }
