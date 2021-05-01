@@ -1,19 +1,16 @@
 use std::any::Any;
 
-use oauth2::{AuthType, AuthUrl, ClientId, ClientSecret, CsrfToken, HttpRequest, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, Scope, TokenUrl};
+use oauth2::{ClientId, ClientSecret, CsrfToken, HttpRequest, PkceCodeChallenge};
 use oauth2::basic::BasicClient;
-use oauth2::http::HeaderMap;
 use time::Duration;
 use url::{Url, ParseError};
 
-use crate::{RawFilterConfig, util};
+use crate::util;
 use crate::messages::{DownStreamResponse, TokenResponse};
-use crate::oauth_client_types::{Access, ClientError, Headers, Redirect, Request, TokenRequest};
+use crate::oauth_client_types::{Access, ClientError, Redirect, Request, TokenRequest};
 use crate::session::{Session, SessionType, SessionUpdate};
-use crate::discovery::ProviderMetadata;
-use crate::config::{FilterConfig, ExtraConfig};
+use crate::config::FilterConfig;
 use std::option::Option::Some;
-use jwt_simple::Error;
 
 
 pub static CALLBACK_PATH: &str = "/callback";
@@ -230,21 +227,13 @@ impl ClientConfig {
 
 #[cfg(test)]
 mod tests {
-    use std::alloc::System;
-    use std::any::Any;
-    use std::borrow::Borrow;
-    use std::collections::HashMap;
-    use std::io::stdin;
     use std::matches;
     use std::time::SystemTime;
 
-    use oauth2::{AccessToken, EmptyExtraTokenFields, StandardTokenResponse};
-    use oauth2::basic::{BasicTokenResponse, BasicTokenType};
-    use oauth2::http::header::{AUTHORIZATION, FORWARDED, SET_COOKIE};
+    use oauth2::http::header::SET_COOKIE;
 
-    use crate::RawFilterConfig;
     use crate::messages::{SuccessfulResponse, TokenResponse};
-    use crate::session::{AuthorizationResponseVerifiers, AuthorizationTokens, Session, SessionType};
+    use crate::session::{Session, SessionType};
 
     use super::*;
     use crate::config::{FilterConfig};
@@ -447,5 +436,4 @@ mod tests {
                     "redirect did not contain scope={}", scope);
         }
     }
-
 }

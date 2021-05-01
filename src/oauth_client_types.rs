@@ -41,7 +41,7 @@ impl Request {
     fn request_url(headers: Headers) -> Result<Url, ClientError> {
         let path =
             headers.iter().find(|(name, _)| { *name == ":path" }).map(|entry| { entry.1.clone() });
-        let mut host_url = Self::host_url(headers)?;
+        let host_url = Self::host_url(headers)?;
         host_url.join(path.as_ref().unwrap_or(&"".to_string()).as_str())
             .map_err(|err| {
                 ClientError::new(500, format!("Could not create URL from base={}, and path={}", host_url, path.unwrap_or_default()),None )
