@@ -1,6 +1,6 @@
 use crate::discovery::{JsonWebKeySet, ProviderMetadata};
 use jwt_simple::claims::NoCustomClaims;
-use jwt_simple::prelude::{RSAPublicKeyLike, VerificationOptions};
+use jwt_simple::prelude::{RSAPublicKeyLike, VerificationOptions, Claims, JWTClaims};
 use jwt_simple::Error;
 use serde::Deserialize;
 use std::fmt::Debug;
@@ -10,6 +10,8 @@ use oauth2::basic::{BasicClient, BasicErrorResponse, BasicTokenResponse, BasicTo
 use oauth2::{AuthUrl, TokenUrl, RedirectUrl, Client, CsrfToken, PkceCodeChallenge, Scope, ClientId, ClientSecret, AuthType, HttpRequest};
 use crate::discovery::ConfigError::BadState;
 use crate::util;
+use std::collections::HashSet;
+
 
 //
 // pub trait ExtraConfig: Debug + Clone {
@@ -65,8 +67,29 @@ impl FilterConfig {
         }
     }
 
-    pub fn validate_token(&self, token: &str) -> Result<(), Error> {
-        self.extra.validate_id_token(token, None)
+    pub fn validate_token(&self, token: &str) ->
+                                              Result<(), Error> {
+        let allowed_issuers: HashSet<String> =
+            vec![&self.issuer].iter().map(|s| s.to_string()).collect();
+
+        // Allowed audiences for ID token is client id and the issuer (for userinfo fetching)
+        let mut allowed_audiences = allowed_issuers.clone();
+        allowed_audiences.insert(self.client_id.clone());
+
+        let option =  VerificationOptions {
+            reject_before: None,
+            accept_future: false,
+            required_subject: None,
+            required_key_id: None,
+            required_public_key: None,
+            required_nonce: None,
+            allowed_issuers: Some(allowed_issuers),
+            allowed_audiences: Some(allowed_audiences),
+            time_tolerance: None,
+            max_validity: None
+        };
+        let _ = self.extra.validate_id_token(token, None)?;
+        Ok(())
     }
 
     pub fn cookie_name(&self) -> &str {
@@ -221,12 +244,14 @@ pub enum ExtraConfig {
 
 impl ExtraConfig {
     // Validates OIDC token according to OpenID Connect Core 1.0
-    fn validate(&self, token: &str, jwks: &JsonWebKeySet, options: Option<VerificationOptions>) -> Result<(), Error> {
+    fn validate(&self, token: &str, jwks: &JsonWebKeySet, options: Option<VerificationOptions>) -> Result<JWTClaims<NoCustomClaims>, Error> {
         log::debug!("validating id token = {}", token);
         let mut errors = vec![];
         for key in jwks.keys().iter() {
             match key.verify_token::<NoCustomClaims>(token, options.clone()) {
-                Ok(claims) => return Ok(()),
+                Ok(claims) => {
+                    return Ok(claims)
+                },
                 Err(error) => errors.push(error),
             }
         }
@@ -234,7 +259,7 @@ impl ExtraConfig {
         Err(errors.pop().unwrap()) // TODO FIX
     }
 
-    pub fn validate_id_token(&self, token: &str, options: Option<VerificationOptions>) -> Result<(), Error> {
+    pub fn validate_id_token(&self, token: &str, options: Option<VerificationOptions>) -> Result<JWTClaims<NoCustomClaims>, Error> {
         match self {
             ExtraConfig::BasicOAuth => Err(Error::new(BadState("Asked to validate ID token, but configured for OAuth".to_string()))),
             ExtraConfig::OIDC { jwks, .. } => {
@@ -449,7 +474,6 @@ mod tests {
             max_validity: None,
         };
         let result = oidc_config.extra.validate_id_token(RAW_ID_TOKEN, Some(options));
-        println!("{:?}", result);
         assert!(result.is_ok())
     }
 

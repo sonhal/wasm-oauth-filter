@@ -109,8 +109,8 @@ impl OAuthClient
                 let refresh_token = response.id_token.clone();
 
                 // validate id token
-                if let Some(id_token) = id_token.clone() {
-                    match self.config.validate_token(&id_token) {
+                if let Some(id_token) = &id_token {
+                    match self.config.validate_token(id_token) {
                         Ok(_) => {}
                         Err(error) => {
                             return Err(ClientError::new(500, error.to_string(), None))
