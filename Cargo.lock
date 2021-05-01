@@ -40,9 +40,10 @@ dependencies = [
  "log",
  "oauth2",
  "proxy-wasm",
+ "rsa-der",
  "serde",
  "serde_json",
- "time",
+ "time 0.2.26",
  "url",
 ]
 
@@ -184,8 +185,11 @@ version = "0.4.19"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "670ad68c9088c2a963aaa298cb369688cf3f9465ce5e2d4ca10e6e0098a1ce73"
 dependencies = [
+ "libc",
  "num-integer",
  "num-traits",
+ "time 0.1.43",
+ "winapi",
 ]
 
 [[package]]
@@ -218,7 +222,7 @@ version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ffdf8865bac3d9a3bde5bde9088ca431b11f5d37c7a578b8086af77248b76627"
 dependencies = [
- "time",
+ "time 0.2.26",
  "version_check",
 ]
 
@@ -283,7 +287,7 @@ version = "0.10.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "41fbdb4ff710acb4db8ca29f93b897529ea6d6a45626d5183b47e012aa6ae7e4"
 dependencies = [
- "elliptic-curve",
+ "elliptic-curve 0.8.5",
  "hmac",
  "signature",
 ]
@@ -295,6 +299,16 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "aaf396058cc7285b342f9a10ed7a377f088942396c46c4c9a7eb4f0782cb1171"
 dependencies = [
  "getrandom 0.2.2",
+]
+
+[[package]]
+name = "elliptic-curve"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2298f66754d859f4c099b0e645cfd258d2dfdfd1bac9496fd514d603ff6a5c6b"
+dependencies = [
+ "generic-array 0.14.4",
+ "subtle",
 ]
 
 [[package]]
@@ -510,16 +524,20 @@ checksum = "dd25036021b0de88a0aff6b850051563c6516d0bf53f8638938edbb9de732736"
 
 [[package]]
 name = "jsonwebkey"
-version = "0.3.1"
+version = "0.3.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e9d04eafead7241b8ef25cbfec90885785a8fab590f6c4bac4b7616afec6f859"
+checksum = "e5a3ee3ec149f11fd59ca86a601d99cce1d617fdc29e82b4d9143a7a24d0cd23"
 dependencies = [
  "base64 0.12.3",
  "bitflags",
  "generic-array 0.14.4",
+ "num-bigint 0.2.6",
+ "p256 0.3.0",
+ "rand 0.7.3",
  "serde",
  "serde_json",
  "thiserror",
+ "yasna",
  "zeroize",
 ]
 
@@ -536,7 +554,7 @@ dependencies = [
  "hmac-sha256",
  "hmac-sha512",
  "k256",
- "p256",
+ "p256 0.7.3",
  "rand 0.7.3",
  "rand 0.8.3",
  "rsa",
@@ -554,7 +572,7 @@ checksum = "4476a0808212a9e81ce802eb1a0cfc60e73aea296553bacc0fac7e1268bc572a"
 dependencies = [
  "cfg-if",
  "ecdsa",
- "elliptic-curve",
+ "elliptic-curve 0.8.5",
  "sha2 0.9.3",
 ]
 
@@ -608,6 +626,17 @@ checksum = "a92518e98c078586bc6c934028adcca4c92a53d6a958196de835170a01d84e4b"
 dependencies = [
  "adler",
  "autocfg 1.0.1",
+]
+
+[[package]]
+name = "num-bigint"
+version = "0.2.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "090c7f9998ee0ff65aa5b723e4009f7b217707f1fb5ea551329cc4d6231fb304"
+dependencies = [
+ "autocfg 1.0.1",
+ "num-integer",
+ "num-traits",
 ]
 
 [[package]]
@@ -714,12 +743,22 @@ checksum = "624a8340c38c1b80fd549087862da4ba43e08858af025b236e509b6649fc13d5"
 
 [[package]]
 name = "p256"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a425ecb71515663b2735fd1e65bb638fd134c5ad23857eb197c2f157784476cf"
+dependencies = [
+ "elliptic-curve 0.4.0",
+ "subtle",
+]
+
+[[package]]
+name = "p256"
 version = "0.7.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8adcc06fe90ec8fb2d2ad46746d2cbd639b158d4240364aa832da7e263dbee91"
 dependencies = [
  "ecdsa",
- "elliptic-curve",
+ "elliptic-curve 0.8.5",
  "sha2 0.9.3",
 ]
 
@@ -908,9 +947,18 @@ dependencies = [
  "num-traits",
  "pem",
  "rand 0.8.3",
- "simple_asn1",
+ "simple_asn1 0.5.2",
  "subtle",
  "zeroize",
+]
+
+[[package]]
+name = "rsa-der"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1170c86c683547fa781a0e39e6e281ebaedd4515be8a806022984f427ea3d44d"
+dependencies = [
+ "simple_asn1 0.4.1",
 ]
 
 [[package]]
@@ -1023,12 +1071,23 @@ dependencies = [
 
 [[package]]
 name = "simple_asn1"
+version = "0.4.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "692ca13de57ce0613a363c8c2f1de925adebc81b04c923ac60c5488bb44abe4b"
+dependencies = [
+ "chrono",
+ "num-bigint 0.2.6",
+ "num-traits",
+]
+
+[[package]]
+name = "simple_asn1"
 version = "0.5.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6e0e9076e5242ff5a58e854cb478ea9caebce01088f86d3d9c6ad336b7655263"
 dependencies = [
  "chrono",
- "num-bigint",
+ "num-bigint 0.4.0",
  "num-traits",
  "thiserror",
 ]
@@ -1168,6 +1227,16 @@ dependencies = [
  "proc-macro2",
  "quote",
  "syn",
+]
+
+[[package]]
+name = "time"
+version = "0.1.43"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ca8a50ef2360fbd1eeb0ecd46795a87a19024eb4b53c5dc916ca1fd95fe62438"
+dependencies = [
+ "libc",
+ "winapi",
 ]
 
 [[package]]
@@ -1350,6 +1419,15 @@ name = "wyz"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "85e60b0d1b5f99db2556934e21937020776a5d31520bf169e851ac44e6420214"
+
+[[package]]
+name = "yasna"
+version = "0.3.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0de7bff972b4f2a06c85f6d8454b09df153af7e3a4ec2aac81db1b105b684ddb"
+dependencies = [
+ "num-bigint 0.2.6",
+]
 
 [[package]]
 name = "zeroize"

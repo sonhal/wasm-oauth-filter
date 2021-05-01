@@ -18,13 +18,17 @@ serde_json = "1.0"
 url = { version = "2.2.1", features = ["serde"] }
 oauth2 = { version = "3.0",  default-features = false }
 jwt-simple = "0.9.4"
-jsonwebkey = "0.3.1"
+jsonwebkey = "0.3.2"
 
 base64 = "0.13.0"
 cookie = "0.15.0"
 cfg-if = "1.0.0"
 getrandom = "0.2"
 time = "0.2.26"
+
+[dev-dependencies]
+rsa-der = "0.2.1"
+jsonwebkey = { version = "0.3.2", features = ["pkcs-convert", "generate"]}
 
 [package.metadata]
 wasm-opt = false

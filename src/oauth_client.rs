@@ -237,29 +237,86 @@ mod tests {
 
     use super::*;
     use crate::config::{FilterConfig};
-    use time::NumericalDuration;
+    use time::{NumericalDuration, NumericalStdDurationShort};
+    use crate::discovery::{JsonWebKeySet, ProviderMetadata};
+    use jsonwebkey::{JsonWebKey, Key, RsaPublic, PublicExponent, ByteVec};
+    use jwt_simple::prelude::{RS256PublicKey, RS256KeyPair, RSAKeyPairLike, JWTClaims, Claims};
+    use jwt_simple::claims::NoCustomClaims;
+    use jsonwebkey::Algorithm::RS256;
 
     fn test_config_extra(scopes: Vec<String>) -> FilterConfig {
         FilterConfig::oauth(
             "sessioncookie",
             "cluster",
-            "issuer",
+            "https://issuer",
             &"https://redirect".parse().unwrap(),
             &"https://authorization".parse().unwrap(),
             &"https://token".parse().unwrap(),
             "myclient",
             "mysecret",
             scopes,
-            1.hours(),
+            Duration::hours(1),
             vec![])
     }
 
-    fn test_config() -> FilterConfig {
-        test_config_extra(vec!["openid".to_string()])
+    fn test_oidc_config(keypair: RS256KeyPair) -> FilterConfig {
+        let public = keypair.public_key();
+        let (n, e) = rsa_der::public_key_from_der(public.to_der().unwrap().as_slice()).unwrap();
+        let jwk = jsonwebkey::JsonWebKey::new(Key::RSA {
+            public: RsaPublic { e: PublicExponent {}, n: ByteVec::from(n) },
+            private: None
+        });
+
+        // let jwks = "{
+        //     \"keys\" : [ {
+        //     \"kty\" : \"RSA\",
+        //     \"e\" : \"AQAB\",
+        //     \"use\" : \"sig\",
+        //     \"kid\" : \"mock-oauth2-server-key\",
+        //     \"n\" : \"kYNXTD_wqZhYMPHObXeQCk20goNe1oTOra4oVkEZadAzx4OGHlyqtAOnkE5SnmmANwF9Z3XcWjp5G1bikaDbVMTf5umNF3OIrYkXo0rczLTtwUSvRu4zzBfOZAR1ziV1HEnZdVyQE4Z-wsQVz-43DRGMVYRnuK_s0WWPLJE9usQLOQ27qyTfXymu5c-Q4mDlxSARZBiATiN2zwlDqhuVHV4JqY8BWvhWwpzFD8iOanwiAvjdUlES720lOVEFzRkWGlQ-vxtT6i-aCBu1ZL3lPIMSz1-jnrC04zNb6_rnsD9Em7zlkP28CyHS3BsIYoU2edBofc-drvZvLa69GeRsBw\"
+        //     } ]
+        // }".to_string().into_bytes();
+
+        FilterConfig::oidc(
+            "sessioncookie",
+            "cluster",
+            "https://issuer",
+            &"https://redirect".parse().unwrap(),
+            &Some("https://authorization".parse().unwrap()),
+            &Some("https://token".parse().unwrap()),
+            "myclient",
+            "mysecret",
+            vec!["openid".to_string()],
+            Duration::hours(1),
+            vec![],
+            JsonWebKeySet::new(vec![jwk]),
+            ProviderMetadata::new(
+                "https://issuer".parse().unwrap(),
+                "https://redirect".parse().unwrap(),
+                Some("https://authorization".parse().unwrap()),
+                Some("https://token".parse().unwrap()),
+                "https://jwks".parse().unwrap(),
+                None,
+                vec!["query".to_string(),
+                     "fragment".to_string(),
+                     "form_post".to_string()
+                ],
+                vec![ "public".to_string() ],
+                vec![ "RS256".to_string() ]
+            )
+        )
     }
 
-    fn test_client() -> crate::oauth_client::OAuthClient {
-        crate::oauth_client::OAuthClient::new(test_config()).unwrap()
+    fn test_oauth_config() -> FilterConfig {
+        test_config_extra(vec!["email".to_string()])
+    }
+
+    fn test_oauth_client() -> crate::oauth_client::OAuthClient {
+        crate::oauth_client::OAuthClient::new(test_oauth_config()).unwrap()
+    }
+
+    fn test_oidc_client(keypair: RS256KeyPair) -> crate::oauth_client::OAuthClient {
+        crate::oauth_client::OAuthClient::new(test_oidc_config(keypair)).unwrap()
     }
 
     fn test_valid_session() -> (String, Session) {
@@ -316,10 +373,16 @@ mod tests {
         ))
     }
 
-    fn test_successful_token_response() -> TokenResponse {
+    fn test_successful_token_response(keypair: RS256KeyPair, ) -> TokenResponse {
+        let mut claims =
+            Claims::create(jwt_simple::prelude::Duration::from_hours(1));
+        let claims = claims.with_issuer("https://issuer")
+            .with_audience("myclient");
+        let token = keypair.sign(claims).unwrap();
+
         TokenResponse::Success(SuccessfulResponse::new(
             "testaccesstoken".to_string(),
-            Some("testidtoken".to_string()),
+            Some(token),
             Some("bearer".to_string()),
             None,
             Some(120)))
@@ -336,13 +399,14 @@ mod tests {
 
     #[test]
     fn new() {
-        let client = crate::oauth_client::OAuthClient::new(test_config());
+        let client =
+            crate::oauth_client::OAuthClient::new(test_oauth_config());
         assert!(client.is_ok())
     }
 
     #[test]
     fn sign_out() {
-        let client = test_client();
+        let client = test_oauth_client();
         let (_, session) = test_valid_session();
 
         let result = client.sign_out(Some(session));
@@ -353,7 +417,7 @@ mod tests {
 
     #[test]
     fn start() {
-        let client = test_client();
+        let client = test_oauth_client();
         let request = test_request();
         let result = client.start(request);
         assert!(result.is_ok());
@@ -366,7 +430,7 @@ mod tests {
 
     #[test]
     fn callback() {
-        let client = test_client();
+        let client = test_oauth_client();
         let request = test_callback_request();
         let (id, callback_session) = test_callback_session();
 
@@ -383,8 +447,11 @@ mod tests {
 
     #[test]
     fn token_response() {
-        let client = test_client();
-        let response = test_successful_token_response();
+        //RS256KeyPair::from_der()
+        let raw_der = "MIIEvQIBADALBgkqhkiG9w0BAQEEggSpMIIEpQIBAAKCAQEAwFV/hfsq9vZtWG4AIx6CByy+vSHUceLxch9+W7AYLEqHEjazuJrznetYFAJnqfujbP9VRACHCDbCx7a3Rj2RRtzmgDSdQvn5g7lYZ3Ljk2rr8dEU3x+ST+i4Ggjooa2t1Z+ukQkt0AJT4ViZopP1CzvOzwSFnCfFAZozun9nSWo7hwICVW2iA3QT3AxKPB5T2G+bi0oQ6Hz20mWQ1xYhhLzjv2uYYptf6R2JHvam+UQesKfHn/72zYGeUCHJKFYZ9WRGn8VdyDhjYPO/B4sTcIsfNadUMWvl0j9F7RFkUcgPqSbBz2zRYnetV8M81o0x81ZuJoQM+KgmcJR6ldRkYQIDAQABAoIBAQCGv5/PY2/vhCiJis+nyyj4E94yLbBkdcYI2Y2yeQYGidRl61Mwo8bIPekAY8ry6WzO4XiAYwo3s/3048s1d87/YaZP7gy7rtyj78fC+lf8oS1axswjoj/kojvRaapqE381qmEoFdE16VuRBnzkzVohm65BlX5yL96zR7C0GaxoXr8eoPdgxecHDr3ikVykGYzmyOOszoPD8XIXdD8eXOT43LNk8HNmV6mGANrG/52leCH6H3o8ofbcaJSDXj4cFW9CZccuUo0lcc/C6gfaY8/iOHiFBI5kDEZ1kqlOM5fiWLV6z/moQxac53yXls/pw4B0LmuwLU1+5kBV4N9KjUUdAoGBAMZE9G8/uAsooVKgfzEGztKhuX1vIP8hFPUeZ80ITr88Ljvk3PPcsZAUA2F4ls64P5s/i3pcGv4zGUxxCMO3xPu8e8oqkMOpxhm+5mzLc2uuV551Lfl1FDPV4dVKG518ubrCdOgcslvQf4b1VPsGvWH0pjm64DKobVtbftyOU0p7AoGBAPhWHmx5zKxMZ0l3/nbf2RHNQ0PRpes7mVPXmxYMf/Fi1iTAwpft3OwHmmYNS9pYJWgR96QJUYy0H/pWCqrNX7pqdSRkVd/GH/bD/ctxtsu8vDXnQcZ++YQtnOa3N2whSWkru93yBHsF6WZhQINBBqWBb1hwyUtSjlowQiR4LrPTAoGAMFEvjEjn7fg50CwCswzorBXzYSkKzoHeXJnLTAEBR8M/tSLh4Z/fua/W3xMHFVt7TLcgo3H8tgP331QQgbmwDHTzaeITo0slVrLZ7ptqBkzXV2tRB+DLSpKN1W+Y6Tky/dtTqBkOMifOXDI/QmlzD4MSWzE6X74B4Gicst0QWS8CgYEAlLOkthnc6BM8Ce8zTWVO6uz5aUPBUXE3p8/ECtjjR9yCFDHkk+sXzbHjz1YI5K7Bf2a63dvCnDlDqLga3RnrR4n1qRv3m+5cN3w2nbry1V6naLOYXE6uBGr3t+Nf6XypI7PPY+BGtI/eqbJ0WeP3IeW2kcO/lT3TBcg94u6gMIcCgYEApXGp3yaUm7gmfn+mICgfxDkcSEVZe9GH/gZ1MNUsLBWthqOFJribC7pjbchvgAm9/oBgv5y3NH8TkdHP9CoKGWU+cPGc9SSjngQ1J7oTa3s67fDxb7mR/9WCYK1Bd46PD81NQmUHKsMdhSIitD9oprueup6gE2T3jvk67+vsAjE=";
+        let keypair = RS256KeyPair::from_der(base64::decode(raw_der).unwrap().as_slice()).unwrap();
+        let client = test_oidc_client(keypair.clone());
+        let response = test_successful_token_response(keypair);
         let (id, callback_session) = test_callback_session();
         let result = client.token_response(response, Some(callback_session));
         assert!(result.is_ok());
@@ -392,7 +459,7 @@ mod tests {
 
     #[test]
     fn proxy() {
-        let client = test_client();
+        let client = test_oauth_client();
         let (request, session) = test_authorized_request();
 
 
@@ -415,7 +482,6 @@ mod tests {
 
     #[test]
     fn configure_scopes() {
-
         let scopes = vec!["openid".to_string(),
                           "email".to_string(),
                           "profile".to_string()];
