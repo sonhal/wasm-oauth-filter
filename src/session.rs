@@ -186,12 +186,6 @@ impl SessionUpdate {
         }
     }
 
-    pub fn set_cookie_header(&self, name: &str, expires: &Duration) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        headers.insert(SET_COOKIE, self.cookie(name, expires).parse().unwrap());
-        headers
-    }
-
     pub fn set_cookie_header_tuple(&self, name: &str, expires: &Duration) -> (String, String) {
         (SET_COOKIE.to_string(), self.cookie(name, expires))
     }
@@ -262,17 +256,6 @@ impl AuthorizationTokens {
             id_token,
             refresh_token,
         }
-    }
-
-    pub fn upstream_headers(&self) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        headers.insert(
-            AUTHORIZATION,
-            HeaderValue::from_str(format!("bearer {}",self.access_token).as_str()).unwrap());
-        self.id_token.as_ref().and_then( |id_token| {
-            headers.insert("X-Forwarded-ID-Token", HeaderValue::from_str(id_token.as_str()).unwrap())
-        });
-        headers
     }
 
     pub fn upstream_headers_tuple(&self) -> Vec<(String, String)> {

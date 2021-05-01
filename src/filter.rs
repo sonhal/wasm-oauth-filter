@@ -19,10 +19,10 @@ use proxy_wasm::traits::{Context, HttpContext, RootContext};
 use proxy_wasm::types::{Action, ContextType, LogLevel, Status};
 use std::cell::RefCell;
 use std::ops::Deref;
+use std::option::Option::Some;
 use std::time::Duration;
 use url;
 use url::{ParseError, Url};
-use std::option::Option::Some;
 
 #[cfg(not(test))]
 #[no_mangle]
@@ -45,16 +45,13 @@ struct OAuthRootContext {
     request_active: bool,
 }
 
-struct OAuthFilter
-
-{
+struct OAuthFilter {
     config: FilterConfig,
     oauth_client: crate::oauth_client::OAuthClient,
     cache: RefCell<SharedCache>,
 }
 
-impl OAuthFilter
-{
+impl OAuthFilter {
     fn new(config: FilterConfig, cache: SharedCache) -> Result<OAuthFilter, ParseError> {
         log::debug!("Creating new HttpContext");
         log::debug!("Cache for HttpContext = {:?}", cache);
@@ -154,9 +151,7 @@ enum FilterAction {
 
 // Implement http functions related to this request.
 // This is the core of the filter code.
-impl HttpContext for OAuthFilter
-
-{
+impl HttpContext for OAuthFilter {
     // This callback will be invoked when request headers arrive
     fn on_http_request_headers(&mut self, _: usize) -> Action {
         let headers = self.get_http_request_headers();
@@ -173,13 +168,18 @@ impl HttpContext for OAuthFilter
         match self.endpoint(request, user_session) {
             Ok(filter_action) => match filter_action {
                 FilterAction::TokenRequest(request) => {
-                    self.dispatch_http_call(
+                    match self.dispatch_http_call(
                         self.config.auth_cluster(),
                         request.headers(),
                         Some(request.body()),
                         vec![],
                         Duration::from_secs(20),
-                    );
+                    ) {
+                        Ok(_) => {}
+                        Err(error) => {
+                            log::error!("Failed to dispatch token request to cluster = {} Envoy status = {:?}", self.config.auth_cluster(), error)
+                        }
+                    }
                     Action::Pause
                 }
                 FilterAction::Redirect(redirect) => {
@@ -290,42 +290,45 @@ impl Context for OAuthRootContext {
         };
 
         if self.provider_metadata.is_none() {
-            ProviderMetadata::from_bytes(bytes)
-                .map_err(|err| {
-                    log::error!("ERROR parsing ProviderMetadata = {}", err);
-                    panic!("Invalid ProviderMetadata response") // Crash hard here as we cannot serve requests
-                })
-                .map(|provider_metadata| {
+            match ProviderMetadata::from_bytes(bytes) {
+                Ok(provider_metadata) => {
                     self.provider_metadata = Some(provider_metadata);
                     let request =
                         discovery::jwks_request(self.provider_metadata.clone().unwrap().jwks_url());
                     match self.dispatch(request) {
                         Ok(_) => {
-                            log::debug!("successfully JWKS request")
+                            log::debug!("successfully dispatched JWKS request")
                         }
                         Err(err) => {
                             log::error!("Failed to JWKS request, Envoy status = {:?}", err)
                         }
                     }
                     log::debug!("Provider Metadata configured: {:?}", self.provider_metadata)
-                });
+                }
+                Err(error) => {
+                    log::error!("ERROR parsing ProviderMetadata = {}", error);
+                    panic!("Invalid ProviderMetadata response") // Crash hard here as we cannot serve requests
+                }
+            }
         } else {
-            JsonWebKeySet::from_bytes(bytes)
-                .map_err(|err| {
-                    log::error!("ERROR parsing JsonWebKeySet = {}", err);
-                    panic!("Invalid JWKS response body");
-                })
-                .map(|jwks| {
+            match JsonWebKeySet::from_bytes(bytes) {
+                Ok(jwks) => {
                     self.jwks = Some(jwks);
                     log::debug!("JWKS configured: {:?}", self.jwks);
                     self.stop_discovery();
-                });
+                }
+                Err(error) => {
+                    log::error!("ERROR parsing JsonWebKeySet = {}", error);
+                    panic!("Invalid JWKS response body");
+                }
+            }
         }
     }
 }
 
 impl RootContext for OAuthRootContext {
-    // handles receiving of configuration when filter is instantiated
+
+    // handles receiving of configuration data when filter is instantiated
     fn on_configure(&mut self, _plugin_configuration_size: usize) -> bool {
         let config_buffer = match self.get_configuration() {
             None => {
@@ -397,23 +400,21 @@ impl RootContext for OAuthRootContext {
                     }
                 };
                 match filter_config.is_oidc() {
-                    false => {
-                        match filter_config.oauth_config() {
-                            Ok(config) =>
-                                Some(Box::new(
-                                OAuthFilter::new(config, cache).unwrap(),
-                            )),
-                            Err(error) => panic!("ERROR during HttpContext OAuth configuration = {}", error)
+                    false => match filter_config.oauth_config() {
+                        Ok(config) => Some(Box::new(OAuthFilter::new(config, cache).unwrap())),
+                        Err(error) => {
+                            panic!("ERROR during HttpContext OAuth configuration = {}", error)
                         }
-
-                    }
+                    },
                     true => {
-                        match filter_config.oidc_config(&self.provider_metadata.clone().unwrap(), &self.jwks.clone().unwrap()) {
-                            Ok(config) =>
-                                Some(Box::new(
-                                    OAuthFilter::new(config, cache).unwrap(),
-                                )),
-                            Err(error) => panic!("ERROR during HttpContext OIDC configuration = {}", error)
+                        match filter_config.oidc_config(
+                            &self.provider_metadata.clone().unwrap(),
+                            &self.jwks.clone().unwrap(),
+                        ) {
+                            Ok(config) => Some(Box::new(OAuthFilter::new(config, cache).unwrap())),
+                            Err(error) => {
+                                panic!("ERROR during HttpContext OIDC configuration = {}", error)
+                            }
                         }
                     }
                 }
@@ -427,7 +428,6 @@ impl RootContext for OAuthRootContext {
 }
 
 impl OAuthRootContext {
-
     // Activate RootContext tick handler which will dispatch discovery request
     fn start_discovery(&self) {
         // Cannot dispatch HTTP calls in config handler, so we need to dispatch in tick handler
@@ -442,11 +442,12 @@ impl OAuthRootContext {
 
     // Dispatch a OIDC discovery request to the authorization server
     fn dispatch_discovery(&self) -> Result<(), discovery::ConfigError> {
-
         let config = if let Some(config) = &self.config {
             config
         } else {
-            return Err(ConfigError::BadState("Attempted discovery without OIDC config".to_string()));
+            return Err(ConfigError::BadState(
+                "Attempted discovery without OIDC config".to_string(),
+            ));
         };
 
         let request = discovery::discovery_request(&config.issuer().parse().unwrap())
@@ -478,28 +479,4 @@ impl OAuthRootContext {
             Duration::from_secs(5),
         )
     }
-}
-
-fn default_redirect_uri() -> String {
-    "{proto}://{authority}{path}".to_owned()
-}
-
-fn default_oidc_cookie_name() -> String {
-    "oidcSession".to_owned()
-}
-
-fn default_target_header_name() -> String {
-    "Authorization".to_owned()
-}
-
-fn default_scopes() -> Vec<String> {
-    vec!["openid".to_string()]
-}
-
-fn default_extra_params() -> Vec<(String, String)> {
-    Vec::new()
-}
-
-fn default_cookie_expire() -> u64 {
-    3600
 }

@@ -2,6 +2,7 @@ use oauth2::HttpRequest;
 use oauth2::url::Url;
 
 use crate::messages::DownStreamResponse;
+use std::{fmt, error};
 
 pub type Headers = Vec<(String, String)>;
 
@@ -126,12 +127,27 @@ pub enum Access {
     UnAuthenticated,
 }
 
+
+// Respresents Errors that occur in the ClientError
 #[derive(Debug)]
 pub struct ClientError {
     status: u64,
     message: String,
     description: Option<String>,
 }
+
+impl fmt::Display for ClientError {
+
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        if self.description.is_some() {
+            write!(f, "OAuth Client error status = {} message = {} description = {}", self.status, self.message, self.description.as_ref().unwrap())
+        } else {
+            write!(f, "OAuth Client error status = {} message = {}", self.status, self.message)
+        }
+    }
+}
+
+impl error::Error for ClientError {}
 
 impl ClientError {
     pub fn new(status: u64, message: String, description: Option<String>) -> ClientError {
