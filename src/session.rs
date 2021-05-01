@@ -2,9 +2,9 @@ use std::time::{SystemTime, SystemTimeError};
 use serde::{Serialize, Deserialize};
 use oauth2::http::{HeaderMap, HeaderValue};
 use oauth2::http::header::{AUTHORIZATION, SET_COOKIE};
-use cookie::{CookieBuilder, Expiration};
+use cookie::CookieBuilder;
 use crate::util;
-use time::{OffsetDateTime, Duration, NumericalDuration};
+use time::{Duration, NumericalDuration};
 
 pub trait SessionCache {
     fn get(&self, id: &String) -> Option<Session>;

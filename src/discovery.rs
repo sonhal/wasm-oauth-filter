@@ -1,14 +1,11 @@
 use serde::{Deserialize, Serialize};
 use std::{error, fmt};
 use url::{ParseError, Url};
-use jwt_simple::prelude::{RSAPublicKey, RS256PublicKey};
+use jwt_simple::prelude::RS256PublicKey;
 use jsonwebkey::{JsonWebKey, Key};
 use crate::messages::{HttpRequest, HttpResponse};
 use oauth2::http::{Method, StatusCode};
 use oauth2::http::header::ACCEPT;
-use crate::oauth_client::ClientConfig;
-use crate::RawFilterConfig;
-
 
 pub const MIME_TYPE_JSON: &str = "application/json";
 pub const MIME_TYPE_JWKS: &str = "application/jwk-set+json";
@@ -203,16 +200,11 @@ pub fn jwks_response(response: HttpResponse) -> Result<JsonWebKeySet, ConfigErro
 #[cfg(test)]
 mod tests {
     use crate::discovery;
-    use crate::discovery::ConfigError;
-    use std::borrow::Cow;
     use jsonwebkey::Key;
-    use jwt_simple::prelude::{RS256PublicKey, RSAPublicKey, NoCustomClaims, RSAPublicKeyLike, VerificationOptions, Duration, Audiences};
-    use serde::Serialize;
-    use oauth2::url::form_urlencoded::ByteSerialize;
+    use jwt_simple::prelude::{RSAPublicKey, NoCustomClaims, RSAPublicKeyLike, VerificationOptions, Duration, Audiences};
     use crate::messages::HttpResponse;
     use oauth2::http::StatusCode;
     use std::collections::HashSet;
-    use std::u64::MAX;
 
     #[test]
     fn discovery_request() {

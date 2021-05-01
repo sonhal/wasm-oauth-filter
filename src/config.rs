@@ -1,14 +1,13 @@
 use crate::discovery::{JsonWebKeySet, ProviderMetadata};
-use crate::oauth_client::{ClientConfig, CALLBACK_PATH};
-use jwt_simple::claims::{JWTClaims, NoCustomClaims};
+use jwt_simple::claims::NoCustomClaims;
 use jwt_simple::prelude::{RSAPublicKeyLike, VerificationOptions};
-use jwt_simple::{Error, JWTError};
-use serde::{Deserialize, Serialize};
+use jwt_simple::Error;
+use serde::Deserialize;
 use std::fmt::Debug;
 use time::Duration;
 use url::Url;
 use oauth2::basic::{BasicClient, BasicErrorResponse, BasicTokenResponse, BasicTokenType};
-use oauth2::{AuthUrl, TokenUrl, RedirectUrl, Client, CsrfToken, PkceCodeChallenge, Scope, AuthorizationRequest, ClientId, ClientSecret, AuthType, HttpRequest};
+use oauth2::{AuthUrl, TokenUrl, RedirectUrl, Client, CsrfToken, PkceCodeChallenge, Scope, ClientId, ClientSecret, AuthType, HttpRequest};
 use crate::discovery::ConfigError::BadState;
 use crate::util;
 
@@ -170,7 +169,7 @@ impl FilterConfig {
     }
 
     pub fn authorization_url(&self, state: CsrfToken, pkce_challenge: PkceCodeChallenge) -> (Url, CsrfToken) {
-        let mut builder = self.client();
+        let builder = self.client();
         let mut builder = builder
             .authorize_url(|| state)
             // Set the PKCE code challenge.
@@ -348,11 +347,9 @@ fn default_cookie_expire() -> u64 {
 mod tests {
     use crate::config::{FilterConfig, RawFilterConfig};
     use crate::discovery::{JsonWebKeySet, ProviderMetadata};
-    use jwt_simple::prelude;
     use jwt_simple::prelude::{Audiences, VerificationOptions};
     use std::collections::HashSet;
     use time::Duration;
-    use url::Url;
 
     #[test]
     fn new() {
