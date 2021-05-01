@@ -16,7 +16,7 @@ use crate::oauth_client::{CALLBACK_PATH, SIGN_OUT_PATH, START_PATH};
 use crate::oauth_client_types::{Access, ClientError, Redirect, Request, TokenRequest};
 use crate::session::SessionCache;
 use proxy_wasm::traits::{Context, HttpContext, RootContext};
-use proxy_wasm::types::{Action, ContextType, Status};
+use proxy_wasm::types::{Action, ContextType, LogLevel, Status};
 use std::cell::RefCell;
 use std::ops::Deref;
 use std::time::Duration;
