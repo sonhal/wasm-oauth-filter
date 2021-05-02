@@ -68,62 +68,6 @@ impl FilterConfig {
         }
     }
 
-    pub fn validate_token(&self, token: &str) -> Result<(), Error> {
-        let allowed_issuers: HashSet<String> =
-            vec![&self.issuer].iter().map(|s| s.to_string()).collect();
-
-        // Allowed audiences for ID token is client id and the issuer (for userinfo fetching)
-        let mut allowed_audiences = allowed_issuers.clone();
-        allowed_audiences.insert(self.client_id.clone());
-
-        let option = VerificationOptions {
-            reject_before: None,
-            accept_future: false,
-            required_subject: None,
-            required_key_id: None,
-            required_public_key: None,
-            required_nonce: None,
-            allowed_issuers: Some(allowed_issuers),
-            allowed_audiences: Some(allowed_audiences),
-            time_tolerance: None,
-            max_validity: None,
-        };
-        let _ = self.extra.validate_id_token(token, None)?;
-        Ok(())
-    }
-
-    pub fn cookie_name(&self) -> &str {
-        &self.cookie_name
-    }
-
-    pub fn cookie_expire(&self) -> &Duration {
-        &self.cookie_expire
-    }
-
-    pub fn auth_cluster(&self) -> &str {
-        &self.auth_cluster
-    }
-
-    pub fn client_id(&self) -> &str {
-        &self.client_id
-    }
-
-    pub fn client_secret(&self) -> &str {
-        &self.client_secret
-    }
-
-    pub fn client(&self) -> Client<BasicErrorResponse, BasicTokenResponse, BasicTokenType> {
-        BasicClient::new(
-            ClientId::new(self.client_id.clone()),
-            Some(ClientSecret::new(self.client_secret.clone())),
-            AuthUrl::from_url(self.auth_uri.clone()),
-            Some(TokenUrl::from_url(self.token_uri.clone())),
-        )
-        .set_redirect_url(RedirectUrl::from_url(self.redirect_uri.clone()))
-    }
-}
-
-impl FilterConfig {
     pub fn oauth(
         cookie_name: &str,
         auth_cluster: &str,
@@ -152,9 +96,7 @@ impl FilterConfig {
             ExtraConfig::BasicOAuth,
         )
     }
-}
 
-impl FilterConfig {
     pub fn oidc(
         cookie_name: &str,
         auth_cluster: &str,
@@ -244,7 +186,62 @@ impl FilterConfig {
             params,
         )
     }
+
+    pub fn validate_token(&self, token: &str) -> Result<(), Error> {
+        let allowed_issuers: HashSet<String> =
+            vec![&self.issuer].iter().map(|s| s.to_string()).collect();
+
+        // Allowed audiences for ID token is client id and the issuer (for userinfo fetching)
+        let mut allowed_audiences = allowed_issuers.clone();
+        allowed_audiences.insert(self.client_id.clone());
+
+        let option = VerificationOptions {
+            reject_before: None,
+            accept_future: false,
+            required_subject: None,
+            required_key_id: None,
+            required_public_key: None,
+            required_nonce: None,
+            allowed_issuers: Some(allowed_issuers),
+            allowed_audiences: Some(allowed_audiences),
+            time_tolerance: None,
+            max_validity: None,
+        };
+        let _ = self.extra.validate_id_token(token, None)?;
+        Ok(())
+    }
+
+    pub fn cookie_name(&self) -> &str {
+        &self.cookie_name
+    }
+
+    pub fn cookie_expire(&self) -> &Duration {
+        &self.cookie_expire
+    }
+
+    pub fn auth_cluster(&self) -> &str {
+        &self.auth_cluster
+    }
+
+    pub fn client_id(&self) -> &str {
+        &self.client_id
+    }
+
+    pub fn client_secret(&self) -> &str {
+        &self.client_secret
+    }
+
+    pub fn client(&self) -> Client<BasicErrorResponse, BasicTokenResponse, BasicTokenType> {
+        BasicClient::new(
+            ClientId::new(self.client_id.clone()),
+            Some(ClientSecret::new(self.client_secret.clone())),
+            AuthUrl::from_url(self.auth_uri.clone()),
+            Some(TokenUrl::from_url(self.token_uri.clone())),
+        )
+        .set_redirect_url(RedirectUrl::from_url(self.redirect_uri.clone()))
+    }
 }
+
 
 #[derive(Clone, Debug)]
 pub enum ExtraConfig {
