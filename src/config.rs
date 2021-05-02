@@ -207,7 +207,7 @@ impl FilterConfig {
             time_tolerance: None,
             max_validity: None,
         };
-        let _ = self.extra.validate_id_token(token, None)?;
+        let _ = self.extra.validate_id_token(token, Some(option))?;
         Ok(())
     }
 
