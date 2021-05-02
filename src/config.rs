@@ -15,11 +15,6 @@ use std::fmt::Debug;
 use time::Duration;
 use url::Url;
 
-//
-// pub trait ExtraConfig: Debug + Clone {
-//     fn validate_token(&self, token: &str) -> Result<(), Error>;
-//     fn authorization_url(builder: AuthorizationRequest) -> AuthorizationRequest;
-// }
 
 #[derive(Clone, Debug)]
 pub struct FilterConfig {

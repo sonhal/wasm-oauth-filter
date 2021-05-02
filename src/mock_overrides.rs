@@ -1,3 +1,8 @@
+
+/// Test stubs
+/// Implements the external function that is supplied by the WebAssembly host at startup
+/// When compiling and running as x86_64 these external functions are not available and the program crashes
+/// It is convenient to run unit tests as x86_64 as the testing support for WebAssembly is not mature.
 #[cfg(test)]
 #[allow(unused)]
 pub mod overrides {
