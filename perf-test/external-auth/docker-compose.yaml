@@ -1,0 +1,87 @@
+version: '3'
+
+services:
+  envoy:
+    build: .
+    volumes:
+      - ./envoy-bootstrap-static-loading.yaml:/etc/envoy.yaml
+    ports:
+      - 8090:10000
+      - 19901:9901
+    depends_on:
+      - mock-oauth2-server
+  oauth2-proxy:
+    image: quay.io/oauth2-proxy/oauth2-proxy:latest-arm64
+    environment:
+      OAUTH2_PROXY_CLIENT_ID: "mycoolclient"
+      OAUTH2_PROXY_CLIENT_SECRET: "mycoolsecret"
+      #OAUTH2_PROXY_COOKIE_EXPIRE: "3600s"
+      OAUTH2_PROXY_COOKIE_SECRET: "ehNu5M1ytZV82fgXHBQuYg=="
+      OAUTH2_PROXY_FORCE_HTTPS: "false"
+      OAUTH2_PROXY_LOGIN_URL: "http://localhost:8888/customiss/authorize"
+      OAUTH2_PROXY_REDEEM_URL: "http://mock-oauth2-server:8080/customiss/token"
+      OAUTH2_PROXY_OIDC_ISSUER_URL: "http://mock-oauth2-server:8080/customiss"
+      OAUTH2_PROXY_OIDC_JWKS_URL: "http://mock-oauth2-server:8080/customiss/jwks"
+      OAUTH2_PROXY_UPSTREAMS: "static://200"
+      OAUTH2_PROXY_EMAIL_DOMAINS: "example.com"
+      OAUTH2_PROXY_HTTP_ADDRESS: "0.0.0.0:8080"
+      OAUTH2_PROXY_SKIP_OIDC_DISCOVERY: "true"
+      # OAUTH2_PROXY_REVERSE_PROXY: "true"
+      OAUTH2_PROXY_REDIRECT_URL: "http://localhost:8090/oauth2/callback"
+      OAUTH2_PROXY_COOKIE_HTTPONLY: "false"
+      OAUTH2_PROXY_COOKIE_SECURE: "false"
+      #OAUTH2_PROXY_COOKIE_DOMAIN: ""
+      OAUTH2_PROXY_INSECURE_OIDC_ALLOW_UNVERIFIED_EMAIL: "true"
+      OAUTH2_PROXY_SHOW_DEBUG_ON_ERROR: "true"
+      OAUTH2_PROXY_PROVIDER: "oidc"
+      #OAUTH2_PROXY_OIDC_GROUPS_CLAIM: ""
+      OAUTH2_PROXY_PROVIDER_DISPLAY_NAME: "OAuth2 Mock Server"
+      OAUTH2_PROXY_ERRORS_TO_INFO_LOG: "true"
+      OAUTH2_PROXY_PASS_AUTHORIZATION_HEADER: "true"
+      OAUTH2_PROXY_PASS_ACCESS_TOKEN: "true"
+      OAUTH2_PROXY_SESSION_STORE_TYPE: "redis"
+      OAUTH2_PROXY_REDIS_CONNECTION_URL: "redis://redis:6379/1"
+      OAUTH2_PROXY_PASS_HOST_HEADER: "true"
+      OAUTH2_PROXY_PASS_USER_HEADERS: "true"
+      OAUTH2_PROXY_SET_XAUTHREQUEST: "true"
+
+    depends_on:
+      - mock-oauth2-server
+  mock-oauth2-server:
+    image: docker.pkg.github.com/navikt/mock-oauth2-server/mock-oauth2-server:0.3.2
+    ports:
+      - 8888:8080
+    environment:
+      JSON_CONFIG_PATH: "/var/mock-auth2-config.json"
+    volumes:
+      - ./mock-auth2-config.json:/var/mock-auth2-config.json
+  token-tester:
+    image: ghcr.io/sonhal/token-tester:latest
+    ports:
+      - 8080:8080
+    environment:
+      PORT: 8080
+      ISSUER_NAME: http://mock-oauth2-server:8080/customiss
+      OIDC_DISCOVERY_URL: http://mock-oauth2-server:8080/customiss/.well-known/openid-configuration
+      OIDC_ACCEPTED_AUDIENCE: mycoolclient
+      JWKS_URI: http://mock-oauth2-server:8080/customiss/jwks
+    restart: always
+    depends_on:
+      - mock-oauth2-server
+  bin:
+    image: kennethreitz/httpbin
+
+  redis:
+    image: docker.io/bitnami/redis:6.2
+    environment:
+      # ALLOW_EMPTY_PASSWORD is recommended only for development.
+      ALLOW_EMPTY_PASSWORD: "yes"
+      REDIS_DISABLE_COMMANDS: "FLUSHDB,FLUSHALL"
+    ports:
+      - '6379:6379'
+
+  tool:
+    image: praqma/network-multitool
+    depends_on:
+      - mock-oauth2-server
+      - token-tester

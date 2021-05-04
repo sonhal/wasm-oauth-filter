@@ -18,39 +18,39 @@ pub static START_PATH: &str  = "/auth";
 pub static SIGN_OUT_PATH: &str = "/sign_out";
 pub static CLIENT_PATHS: (&str, &str, &str) = (CALLBACK_PATH, START_PATH, SIGN_OUT_PATH);
 
-//! ## Implements OAuth2 and OpenID Connect Authorization code flows
-//! - ([RFC 6749](https://tools.ietf.org/html/rfc6749))
-//! - ([OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html))
-//!
-//! ### Public Interface**
-//!
-//! - Creating a client: The client needs a FilterConfig.
-//!  ```rust,no_run
-//!    let client = OAuthClient::new(config)?;
-//!  ```
-//! - Start new OAuth / OIDC flow: The client accepts an request from the end-user and returns a
-//! redirect URL with the correct parameters. Additionally a update struct is returned with values
-//! to be stored for the session.
-//!  ```rust,no_run
-//!    let (redirect, update) = self.oauth_client.start(request)?;
-//!  ```
-//!
-//! - Handle a callback from the authorization server: The call accepts the redirect request originating
-//! from the authorization server and the end-user session. Returns a token request for the authorization server
-//! token endpoint.
-//!  ```rust,no_run
-//!    let token_request = self.oauth_client.callback(request, session)?;
-//!  ```
-//!
-//! - Proxy Http request for upstream applications: Accepts the end-user session and returns the
-//! how the request should be handled based on the session state.
-//!  ```rust,no_run
-//!         match self.oauth_client.proxy(session)? {
-//!             Access::Denied(response) => { .. }
-//!             Access::Allowed(headers) => { .. }
-//!             Access::UnAuthenticated => { .. }
-//!         }
-//!  ```
+///! ## Implements OAuth2 and OpenID Connect Authorization code flows
+///! - ([RFC 6749](https://tools.ietf.org/html/rfc6749))
+///! - ([OpenID Connect Core 1.0](https://openid.net/specs/openid-connect-core-1_0.html))
+///!
+///! ### Public Interface**
+///!
+///! - Creating a client: The client needs a FilterConfig.
+///!  ```rust,no_run
+///!    let client = OAuthClient::new(config)?;
+///!  ```
+///! - Start new OAuth / OIDC flow: The client accepts an request from the end-user and returns a
+///! redirect URL with the correct parameters. Additionally a update struct is returned with values
+///! to be stored for the session.
+///!  ```rust,no_run
+///!    let (redirect, update) = self.oauth_client.start(request)?;
+///!  ```
+///!
+///! - Handle a callback from the authorization server: The call accepts the redirect request originating
+///! from the authorization server and the end-user session. Returns a token request for the authorization server
+///! token endpoint.
+///!  ```rust,no_run
+///!    let token_request = self.oauth_client.callback(request, session)?;
+///!  ```
+///!
+///! - Proxy Http request for upstream applications: Accepts the end-user session and returns the
+///! how the request should be handled based on the session state.
+///!  ```rust,no_run
+///!         match self.oauth_client.proxy(session)? {
+///!             Access::Denied(response) => { .. }
+///!             Access::Allowed(headers) => { .. }
+///!             Access::UnAuthenticated => { .. }
+///!         }
+///!  ```
 pub(crate) struct OAuthClient
 {
     config: FilterConfig,
