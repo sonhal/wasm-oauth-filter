@@ -1,8 +1,8 @@
-use oauth2::HttpRequest;
 use oauth2::url::Url;
+use oauth2::HttpRequest;
 
 use crate::messages::DownStreamResponse;
-use std::{fmt, error};
+use std::{error, fmt};
 
 pub type Headers = Vec<(String, String)>;
 
@@ -26,14 +26,14 @@ impl Request {
         self.find_query("code")
     }
 
-    pub fn state(&self) -> Option<String>  {
+    pub fn state(&self) -> Option<String> {
         self.find_query("state")
     }
 
-    fn find_query(&self, name: &str) -> Option<String>  {
-        for (key, value ) in self.url.query_pairs() {
+    fn find_query(&self, name: &str) -> Option<String> {
+        for (key, value) in self.url.query_pairs() {
             if key == name {
-                return Some(value.to_string())
+                return Some(value.to_string());
             }
         }
         None
@@ -41,41 +41,48 @@ impl Request {
 
     fn request_url(headers: &Headers) -> Result<Url, ClientError> {
         let path_header = ":path";
-         match headers
+        let path = match headers
             .iter()
-            .find(|(name, _)| { name == path_header })
-            .map(|(_, value)| { value.clone() }) {
-                 Some(path) => {
-                     let host_url = Self::host_url(headers)?;
-                     match host_url.join(path.as_str()) {
-                         Err(err) => {
-                             Err(ClientError::new(
-                                 500,
-                                 format!("Could not create URL from base={}, and path={}", host_url, path),
-                                 None
-                             ))
-                         }
-                         Ok(url) => Ok(url),
-                     }
-                 },
-                 _ => {
-                     Err(ClientError::new(
-                        500,
-                         format!("Unable to find header '{}' when looking for request URL in headers", path_header),
-                         None,
-                     ))
-                 },
+            .find(|(name, _)| name == path_header)
+            .map(|(_, value)| value.clone())
+        {
+            Some(path) => path,
+            _ => "",
+        };
+        let host_url = Self::host_url(headers)?;
+        match host_url.join(path.as_str()) {
+            Err(_) => Err(ClientError::new(
+                500,
+                format!(
+                    "Could not create URL from base={}, and path={}",
+                    host_url, path
+                ),
+                None,
+            )),
+            Ok(url) => Ok(url),
         }
     }
 
     fn host_url(headers: &Headers) -> Result<Url, ClientError> {
-        let scheme =
-            headers.iter().find(|(name, _)| { *name == "x-forwarded-proto" }).map(|entry| { entry.1.clone() });
-        let authority =
-            headers.iter().find(|(name, _)| { *name == ":authority" }).map(|entry| { entry.1.clone() });
+        let scheme = headers
+            .iter()
+            .find(|(name, _)| *name == "x-forwarded-proto")
+            .map(|entry| entry.1.clone());
+        let authority = headers
+            .iter()
+            .find(|(name, _)| *name == ":authority")
+            .map(|entry| entry.1.clone());
         match (scheme, authority) {
-            (None, _) => Err(ClientError::new(400,"No scheme in request header".to_string(), None)),
-            (_, None) => Err(ClientError::new(400, "No authority in request header".to_string(), None)),
+            (None, _) => Err(ClientError::new(
+                400,
+                "No scheme in request header".to_string(),
+                None,
+            )),
+            (_, None) => Err(ClientError::new(
+                400,
+                "No authority in request header".to_string(),
+                None,
+            )),
             (Some(scheme), Some(authority)) => {
                 Ok(format!("{}://{}", scheme, authority).parse().unwrap())
             }
@@ -85,7 +92,7 @@ impl Request {
 
 pub struct Redirect {
     url: Url,
-    headers: Headers
+    headers: Headers,
 }
 
 impl Redirect {
@@ -108,7 +115,6 @@ pub struct TokenRequest {
 }
 
 impl TokenRequest {
-
     pub fn new(raw_request: HttpRequest) -> TokenRequest {
         Self { raw_request }
     }
@@ -118,7 +124,8 @@ impl TokenRequest {
         headers.append(&mut vec![
             (":method", "POST"),
             (":path", self.raw_request.url.path()),
-            (":authority", self.raw_request.url.host_str().unwrap())]);
+            (":authority", self.raw_request.url.host_str().unwrap()),
+        ]);
         headers
     }
 
@@ -131,11 +138,11 @@ impl TokenRequest {
     }
 
     fn serialize_headers(&self) -> Vec<(&str, &str)> {
-        self.raw_request.headers.iter()
-            .map(
-                |( name, value)|
-                    { (name.as_str(), value.to_str().unwrap()) }
-            ).collect()
+        self.raw_request
+            .headers
+            .iter()
+            .map(|(name, value)| (name.as_str(), value.to_str().unwrap()))
+            .collect()
     }
 }
 
@@ -146,7 +153,6 @@ pub enum Access {
     UnAuthenticated,
 }
 
-
 // Respresents Errors that occur in the ClientError
 #[derive(Debug)]
 pub struct ClientError {
@@ -156,12 +162,21 @@ pub struct ClientError {
 }
 
 impl fmt::Display for ClientError {
-
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if self.description.is_some() {
-            write!(f, "OAuth Client error status = {} message = {} description = {}", self.status, self.message, self.description.as_ref().unwrap())
+            write!(
+                f,
+                "OAuth Client error status = {} message = {} description = {}",
+                self.status,
+                self.message,
+                self.description.as_ref().unwrap()
+            )
         } else {
-            write!(f, "OAuth Client error status = {} message = {}", self.status, self.message)
+            write!(
+                f,
+                "OAuth Client error status = {} message = {}",
+                self.status, self.message
+            )
         }
     }
 }
@@ -173,7 +188,7 @@ impl ClientError {
         ClientError {
             status,
             message,
-            description
+            description,
         }
     }
 
