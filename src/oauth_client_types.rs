@@ -47,7 +47,7 @@ impl Request {
             .map(|(_, value)| value.clone())
         {
             Some(path) => path,
-            _ => "",
+            _ => "".to_string(),
         };
         let host_url = Self::host_url(headers)?;
         match host_url.join(path.as_str()) {
