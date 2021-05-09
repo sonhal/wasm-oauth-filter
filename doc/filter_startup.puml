@@ -1,0 +1,64 @@
+
+@startuml component
+skinparam monochrome true
+skinparam ArrowFontSize 15
+
+box "Envoy Proxy" #LightBlue
+participant envoy as "Envoy Runtime"
+participant envoyhost as "Envoy WebAssembly Host"
+participant filter as "WebAssembly Filter Module"
+end box
+participant idprovider as "Authorization server"
+
+== Envoy Proxy start up and configuration ==
+
+
+    envoy -> envoy: Start up and initialize
+    envoy -> envoyhost: Instantiates WebAssembly host
+    envoyhost -> filter: _start
+    note right:  Initializes internal state
+    envoyhost -> filter: proxy_on_configure(root_context_id, plugin_configuration_size) -> success
+    filter -> envoyhost: proxy_get_buffer(...) -> call_result
+    note right:  Fetch config buffer from proxy
+    filter -> filter: Parse and store configuration\nin module internal state
+    alt OIDC is configured
+        filter -> envoyhost: proxy_set_tick_period_milliseconds(tick_period) -> call_result
+        note right: Activate tick handling for discovery
+    end
+    envoy -> envoy: Finishes initialization\nof components
+
+
+== Start up and configuration complete ==
+
+
+    alt OIDC is configured
+    envoyhost -> filter: proxy_on_tick(root_context_id)
+    note left: Host issues a on_tick event
+    filter -> filter: Verifies invariants, ex. not \nalready dispatched a discovery request
+        alt Discovery request
+            filter -> envoyhost: proxy_dispatch_http_call(...) -> call_result
+            note right: Dispatch request to \nauthorization server \ndiscovery endpoint
+            envoyhost -> envoy
+            envoy -> idprovider: HTTP GET /.well-known/openid-configuration
+            return OpenID Provider Metadata
+            envoy -> envoyhost
+            envoyhost -> filter: proxy_on_http_call_response(...)
+            filter -> envoyhost: proxy_get_buffer(..) -> call_result
+            note right: Get response data
+            filter -> filter: Parse, validate and store metadata
+            filter -> envoyhost: proxy_dispatch_http_call(...) -> call_result
+            note right: Dispatch request to \nauthorization server \nJWKS endpoint
+            envoyhost -> envoy
+            envoy -> idprovider: HTTP GET /jwks.json
+            return OpenID Provider JSON Web Key Set
+            envoy -> envoyhost
+            envoyhost -> filter: proxy_on_http_call_response(...)
+            filter -> envoyhost: proxy_get_buffer(..) -> call_result
+            note right: Get response data
+            filter -> filter: Parse, validate and store the JWKS
+            filter -> envoyhost: proxy_set_tick_period_milliseconds(0) -> call_result
+            note right: Turn off tick events \nsince discovery is completed
+        end
+    end
+
+@enduml
