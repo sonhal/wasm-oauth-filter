@@ -1,20 +1,19 @@
 use std::any::Any;
 
-use oauth2::{ClientId, ClientSecret, HttpRequest, PkceCodeChallenge};
 use oauth2::basic::BasicClient;
+use oauth2::{ClientId, ClientSecret, HttpRequest, PkceCodeChallenge};
 use time::Duration;
-use url::{Url, ParseError};
+use url::{ParseError, Url};
 
-use crate::util;
+use crate::config::FilterConfig;
 use crate::messages::{DownStreamResponse, TokenResponse};
 use crate::oauth_client_types::{Access, ClientError, Redirect, Request, TokenRequest};
 use crate::session::{Session, SessionType, SessionUpdate};
-use crate::config::FilterConfig;
+use crate::util;
 use std::option::Option::Some;
 
-
 pub static CALLBACK_PATH: &str = "/callback";
-pub static START_PATH: &str  = "/auth";
+pub static START_PATH: &str = "/auth";
 pub static SIGN_OUT_PATH: &str = "/sign_out";
 pub static CLIENT_PATHS: (&str, &str, &str) = (CALLBACK_PATH, START_PATH, SIGN_OUT_PATH);
 
@@ -51,8 +50,7 @@ pub static CLIENT_PATHS: (&str, &str, &str) = (CALLBACK_PATH, START_PATH, SIGN_O
 ///!             Access::UnAuthenticated => { .. }
 ///!         }
 ///!  ```
-pub(crate) struct OAuthClient
-{
+pub(crate) struct OAuthClient {
     config: FilterConfig,
     client: BasicClient,
 }
@@ -69,29 +67,29 @@ pub(crate) struct ClientConfig {
     cookie_expire: Duration,
 }
 
-impl OAuthClient
-{
-
-    pub fn new(
-        config: FilterConfig,
-    ) -> Result<OAuthClient, ParseError> {
-
+impl OAuthClient {
+    pub fn new(config: FilterConfig) -> Result<OAuthClient, ParseError> {
         let client = config.client();
 
-        Ok(OAuthClient {
-            config,
-            client,
-        })
+        Ok(OAuthClient { config, client })
     }
 
-    pub fn sign_out(&self, session: Option<Session>) -> Result<(DownStreamResponse, SessionUpdate), ClientError> {
+    pub fn sign_out(
+        &self,
+        session: Option<Session>,
+    ) -> Result<(DownStreamResponse, SessionUpdate), ClientError> {
         match session {
-            None => {
-                Err(ClientError::new(400, "No session to sign out from".to_string(), None))
-            }
+            None => Err(ClientError::new(
+                400,
+                "No session to sign out from".to_string(),
+                None,
+            )),
             Some(session) => {
                 let header = session.clear_cookie_header_tuple(self.config.cookie_name());
-                Ok((DownStreamResponse::new(vec![header], 200, "Signed Out".to_string()), session.end_session()))
+                Ok((
+                    DownStreamResponse::new(vec![header], 200, "Signed Out".to_string()),
+                    session.end_session(),
+                ))
             }
         }
     }
@@ -100,20 +98,37 @@ impl OAuthClient
     pub fn start(&self, request: Request) -> Result<(Redirect, SessionUpdate), ClientError> {
         let (redirect_url, state, verifier) = self.authorization_server_redirect();
 
-        let update = SessionUpdate::auth_request(self.valid_url(request.url()).to_string(), state, verifier);
-        let header = update.set_cookie_header_tuple(self.config.cookie_name(), self.config.cookie_expire());
+        let update =
+            SessionUpdate::auth_request(self.valid_url(request.url()).to_string(), state, verifier);
+        let header =
+            update.set_cookie_header_tuple(self.config.cookie_name(), self.config.cookie_expire());
         Ok((Redirect::new(redirect_url, vec![header]), update))
     }
 
-    pub fn callback(&self, request: Request, session: Option<Session>) -> Result<TokenRequest, ClientError>{
-
+    pub fn callback(
+        &self,
+        request: Request,
+        session: Option<Session>,
+    ) -> Result<TokenRequest, ClientError> {
         let session = if let None = session {
-            return Err(ClientError::new(500, "No session for this request".to_string(), None));
-        } else {  session.unwrap() };
+            return Err(ClientError::new(
+                500,
+                "No session for this request".to_string(),
+                None,
+            ));
+        } else {
+            session.unwrap()
+        };
 
         let verifiers = if let SessionType::AuthorizationRequest(verifiers) = session.data {
             verifiers
-        } else { return Err(ClientError::new(500, "Session for authorization callback is not valid".to_string(), None))};
+        } else {
+            return Err(ClientError::new(
+                500,
+                "Session for authorization callback is not valid".to_string(),
+                None,
+            ));
+        };
 
         let code = request.authorization_code();
         let state = request.state();
@@ -124,16 +139,30 @@ impl OAuthClient
                 Ok(TokenRequest::new(request))
             }
             _ => {
-                log::warn!("Received request={:?} on callback endpoint without required parameters", request);
-                Err(ClientError::new(400,"Received request on callback endpoint without required parameters".to_string(), None))
+                log::warn!(
+                    "Received request={:?} on callback endpoint without required parameters",
+                    request
+                );
+                Err(ClientError::new(
+                    400,
+                    "Received request on callback endpoint without required parameters".to_string(),
+                    None,
+                ))
             }
         }
     }
 
-    pub fn token_response(&self, response: TokenResponse, session: Option<Session>) -> Result<(Redirect, SessionUpdate), ClientError>{
+    pub fn token_response(
+        &self,
+        response: TokenResponse,
+        session: Option<Session>,
+    ) -> Result<(Redirect, SessionUpdate), ClientError> {
         match response {
-            TokenResponse::Error(error) =>
-                Err(ClientError::new(500, format!("Token endpoint error={}", error.to_error_body().serialize()), None)),
+            TokenResponse::Error(error) => Err(ClientError::new(
+                500,
+                format!("Token endpoint error={}", error.to_error_body().serialize()),
+                None,
+            )),
             TokenResponse::Success(response) => {
                 let access_token = response.access_token.clone();
                 let id_token = response.id_token.clone();
@@ -144,15 +173,17 @@ impl OAuthClient
                 if let Some(id_token) = &id_token {
                     match self.config.validate_token(id_token) {
                         Ok(_) => {}
-                        Err(error) => {
-                            return Err(ClientError::new(500, error.to_string(), None))
-                        }
+                        Err(error) => return Err(ClientError::new(500, error.to_string(), None)),
                     }
                 }
                 let session = if let Some(session) = session {
                     session
                 } else {
-                    return Err(ClientError::new(500, "Token response handling error, no session for the response".to_string(), None));
+                    return Err(ClientError::new(
+                        500,
+                        "Token response handling error, no session for the response".to_string(),
+                        None,
+                    ));
                 };
 
                 match &session.data {
@@ -168,7 +199,7 @@ impl OAuthClient
         }
     }
 
-    pub fn proxy(&self, session: Option<Session>) -> Result<Access, ClientError>{
+    pub fn proxy(&self, session: Option<Session>) -> Result<Access, ClientError> {
         match session {
             None => Ok(Access::UnAuthenticated),
             Some(session) => {
@@ -180,14 +211,26 @@ impl OAuthClient
                                     true => Ok(Access::Allowed(tokens.upstream_headers_tuple())),
                                     false => {
                                         // TODO use refresh token if valid
-                                        Ok(Access::Denied(DownStreamResponse::new(vec![], 403, "Tokens expired".to_string())))
+                                        Ok(Access::Denied(DownStreamResponse::new(
+                                            vec![],
+                                            403,
+                                            "Tokens expired".to_string(),
+                                        )))
                                     }
                                 }
                             }
-                            Err(err) => Err(ClientError::new(500, format!("Error occurred while getting system time, error={}", err), None)),
+                            Err(err) => Err(ClientError::new(
+                                500,
+                                format!("Error occurred while getting system time, error={}", err),
+                                None,
+                            )),
                         }
                     }
-                    _ => Ok(Access::Denied(DownStreamResponse::new(vec![], 403, "UnAuthorized session".to_string())))
+                    _ => Ok(Access::Denied(DownStreamResponse::new(
+                        vec![],
+                        403,
+                        "UnAuthorized session".to_string(),
+                    ))),
                 }
             }
         }
@@ -195,10 +238,8 @@ impl OAuthClient
 
     fn authorization_server_redirect(&self) -> (Url, String, String) {
         let verifier = util::new_random_verifier(32);
-        let pkce_challenge =
-            PkceCodeChallenge::from_code_verifier_sha256(&verifier);
-        let (auth_url, csrf_token) =
-            self.config.authorization_url(pkce_challenge);
+        let pkce_challenge = PkceCodeChallenge::from_code_verifier_sha256(&verifier);
+        let (auth_url, csrf_token) = self.config.authorization_url(pkce_challenge);
 
         let state = csrf_token.secret().clone();
 
@@ -211,20 +252,18 @@ impl OAuthClient
 
     fn valid_url(&self, url: &Url) -> Url {
         let mut url = url.clone();
-        if url.path().starts_with(CALLBACK_PATH) ||
-            url.path().starts_with(START_PATH) ||
-            url.path().starts_with(SIGN_OUT_PATH)
+        if url.path().starts_with(CALLBACK_PATH)
+            || url.path().starts_with(START_PATH)
+            || url.path().starts_with(SIGN_OUT_PATH)
         {
             url.set_path("/");
-            return url
+            return url;
         }
         url
     }
 }
 
-
 impl ClientConfig {
-
     pub fn new(
         cookie_name: &str,
         redirect_url: &str,
@@ -248,11 +287,10 @@ impl ClientConfig {
             client_secret: ClientSecret::new(client_secret.to_string()),
             extra_params,
             scopes,
-            cookie_expire: Duration::seconds(cookie_expire as i64)
+            cookie_expire: Duration::seconds(cookie_expire as i64),
         }
     }
 }
-
 
 #[cfg(test)]
 mod tests {
@@ -265,10 +303,11 @@ mod tests {
     use crate::session::{Session, SessionType};
 
     use super::*;
-    use crate::config::{FilterConfig};
+    use crate::config::{FilterConfig, OIDCClaims};
     use crate::discovery::{JsonWebKeySet, ProviderMetadata};
-    use jsonwebkey::{Key, RsaPublic, PublicExponent, ByteVec};
-    use jwt_simple::prelude::{RS256KeyPair, RSAKeyPairLike, Claims};
+    use jsonwebkey::{ByteVec, Key, PublicExponent, RsaPublic};
+    use jwt_simple::claims::JWTClaims;
+    use jwt_simple::prelude::{Claims, RS256KeyPair, RSAKeyPairLike, HashSet};
 
     fn test_config_extra(scopes: Vec<String>) -> FilterConfig {
         FilterConfig::oauth(
@@ -282,15 +321,19 @@ mod tests {
             "mysecret",
             scopes,
             Duration::hours(1),
-            vec![])
+            vec![],
+        )
     }
 
     fn test_oidc_config(keypair: RS256KeyPair) -> FilterConfig {
         let public = keypair.public_key();
         let (n, e) = rsa_der::public_key_from_der(public.to_der().unwrap().as_slice()).unwrap();
         let jwk = jsonwebkey::JsonWebKey::new(Key::RSA {
-            public: RsaPublic { e: PublicExponent {}, n: ByteVec::from(n) },
-            private: None
+            public: RsaPublic {
+                e: PublicExponent {},
+                n: ByteVec::from(n),
+            },
+            private: None,
         });
 
         // let jwks = "{
@@ -323,13 +366,14 @@ mod tests {
                 Some("https://token".parse().unwrap()),
                 "https://jwks".parse().unwrap(),
                 None,
-                vec!["query".to_string(),
-                     "fragment".to_string(),
-                     "form_post".to_string()
+                vec![
+                    "query".to_string(),
+                    "fragment".to_string(),
+                    "form_post".to_string(),
                 ],
-                vec![ "public".to_string() ],
-                vec![ "RS256".to_string() ]
-            )
+                vec!["public".to_string()],
+                vec!["RS256".to_string()],
+            ),
         )
     }
 
@@ -346,69 +390,93 @@ mod tests {
     }
 
     fn test_valid_session() -> (String, Session) {
-        ("testession".to_string(), Session::tokens(
+        (
             "testession".to_string(),
-            "testaccesstoken".to_string(),
-            Some(std::time::Duration::from_secs(120)),
-            Some("testidtoken".to_string()),
-            None,
-        ))
+            Session::tokens(
+                "testession".to_string(),
+                "testaccesstoken".to_string(),
+                Some(std::time::Duration::from_secs(120)),
+                Some("testidtoken".to_string()),
+                None,
+            ),
+        )
     }
 
     fn test_callback_session() -> (String, Session) {
-        ("testession".to_string(), Session::verifiers(
+        (
             "testession".to_string(),
-            SystemTime::now(),
-            "http://localhost/path".to_string(),
-            "123".to_string(),
-            Some("abc".to_string()))
+            Session::verifiers(
+                "testession".to_string(),
+                SystemTime::now(),
+                "http://localhost/path".to_string(),
+                "123".to_string(),
+                Some("abc".to_string()),
+            ),
         )
     }
 
     fn test_request() -> Request {
-        match Request::new( vec![
+        match Request::new(vec![
             ("random_header".to_string(), "value".to_string()),
             ("x-forwarded-proto".to_string(), "http".to_string()),
             (":authority".to_string(), "localhost".to_string()),
-            (":path".to_string(), "/test-path".to_string())
+            (":path".to_string(), "/test-path".to_string()),
         ]) {
             Ok(request) => request,
             Err(e) => {
                 panic!("Unable to generate generate oauth test request: {:?}", e)
-            },
+            }
         }
     }
 
     fn test_callback_request() -> Request {
-        Request::new( vec![
+        Request::new(vec![
             ("random_header".to_string(), "value".to_string()),
             ("x-forwarded-proto".to_string(), "http".to_string()),
             (":authority".to_string(), "localhost".to_string()),
-            (":path".to_string(), "/callback?code=1234abcd&state=123".to_string())
-        ]).unwrap()
+            (
+                ":path".to_string(),
+                "/callback?code=1234abcd&state=123".to_string(),
+            ),
+        ])
+        .unwrap()
     }
 
     fn test_authorized_request() -> (Request, Session) {
-        (Request::new( vec![
-            ("random_header".to_string(), "value".to_string()),
-            ("x-forwarded-proto".to_string(), "http".to_string()),
-            (":authority".to_string(), "localhost".to_string()),
-            (":path".to_string(), "/resource".to_string())
-        ]).unwrap(),
-        Session::tokens(
-            "mysession".to_string(),
-            "testaccesstoken".to_string(),
-            Some(std::time::Duration::from_secs(120)),
-            Some("testidtoken".to_string()),
-            None,
-        ))
+        (
+            Request::new(vec![
+                ("random_header".to_string(), "value".to_string()),
+                ("x-forwarded-proto".to_string(), "http".to_string()),
+                (":authority".to_string(), "localhost".to_string()),
+                (":path".to_string(), "/resource".to_string()),
+            ])
+            .unwrap(),
+            Session::tokens(
+                "mysession".to_string(),
+                "testaccesstoken".to_string(),
+                Some(std::time::Duration::from_secs(120)),
+                Some("testidtoken".to_string()),
+                None,
+            ),
+        )
     }
 
-    fn test_successful_token_response(keypair: RS256KeyPair, ) -> TokenResponse {
-        let claims =
-            Claims::create(jwt_simple::prelude::Duration::from_hours(1));
-        let claims = claims.with_issuer("https://issuer")
-            .with_audience("myclient");
+    fn test_successful_token_response(keypair: RS256KeyPair) -> TokenResponse {
+        let claims: JWTClaims<OIDCClaims> = Claims::with_custom_claims(
+            OIDCClaims {
+                azp: Some("myclient".to_string()),
+                acr: None,
+            },
+            jwt_simple::prelude::Duration::from_hours(1),
+        );
+
+        let mut audience = jwt_simple::prelude::HashSet::new();
+        audience.insert("myclient".to_string());
+        audience.insert("https://issuer".to_string());
+
+        let claims = claims
+            .with_issuer("https://issuer")
+            .with_audiences(audience);
         let token = keypair.sign(claims).unwrap();
 
         TokenResponse::Success(SuccessfulResponse::new(
@@ -416,10 +484,11 @@ mod tests {
             Some(token),
             Some("bearer".to_string()),
             None,
-            Some(120)))
+            Some(120),
+        ))
     }
 
-    fn contains_set_cookie_header(headers: Vec<(String, String)>)  -> bool {
+    fn contains_set_cookie_header(headers: Vec<(String, String)>) -> bool {
         for (key, val) in headers {
             if key == SET_COOKIE.to_string() {
                 return true;
@@ -430,8 +499,7 @@ mod tests {
 
     #[test]
     fn new() {
-        let client =
-            crate::oauth_client::OAuthClient::new(test_oauth_config());
+        let client = crate::oauth_client::OAuthClient::new(test_oauth_config());
         assert!(client.is_ok())
     }
 
@@ -456,7 +524,10 @@ mod tests {
         let expected = Url::parse("https://authorization").unwrap().origin();
         assert_eq!(redirect.url().origin(), expected);
         // The session we are storing should be an AuthorizationRequest
-        assert!(matches!(update.create_session().data, SessionType::AuthorizationRequest(..)));
+        assert!(matches!(
+            update.create_session().data,
+            SessionType::AuthorizationRequest(..)
+        ));
     }
 
     #[test]
@@ -469,12 +540,18 @@ mod tests {
         assert!(result.is_ok());
 
         let result = result.unwrap();
-        assert_eq!(result.clone().url().clone(), Url::parse("https://token").unwrap());
+        assert_eq!(
+            result.clone().url().clone(),
+            Url::parse("https://token").unwrap()
+        );
         // The body of the token request should contain the client id and secret
-        assert!(String::from_utf8(result.clone().body().to_vec()).unwrap().contains(&client.config.client_secret()));
-        assert!(String::from_utf8(result.clone().body().to_vec()).unwrap().contains(&client.config.client_id()));
+        assert!(String::from_utf8(result.clone().body().to_vec())
+            .unwrap()
+            .contains(&client.config.client_secret()));
+        assert!(String::from_utf8(result.clone().body().to_vec())
+            .unwrap()
+            .contains(&client.config.client_id()));
     }
-
 
     #[test]
     fn token_response() {
@@ -493,7 +570,6 @@ mod tests {
         let client = test_oauth_client();
         let (request, session) = test_authorized_request();
 
-
         // Authenticated and valid sessions are accepted
         let result = client.proxy(Some(session));
         assert!(result.is_ok());
@@ -508,29 +584,31 @@ mod tests {
         let result = client.proxy(Some(test_callback_session().1));
         assert!(result.is_ok());
         assert!(matches!(result.unwrap(), Access::Denied(..)));
-
     }
 
     #[test]
     fn configure_scopes() {
-        let scopes = vec!["openid".to_string(),
-                          "email".to_string(),
-                          "profile".to_string()];
+        let scopes = vec![
+            "openid".to_string(),
+            "email".to_string(),
+            "profile".to_string(),
+        ];
         let config = test_config_extra(scopes.clone());
-
 
         let client = crate::oauth_client::OAuthClient::new(config).unwrap();
         let request = test_request();
-
 
         // Correct scopes should be in redirect to authorization server
         let result = client.start(request);
         assert!(result.is_ok());
         let result = result.unwrap();
-        assert!(matches!(result, (Redirect {..}, _)));
+        assert!(matches!(result, (Redirect { .. }, _)));
         for scope in scopes.iter() {
-            assert!(result.0.url().query().unwrap().contains(scope),
-                    "redirect did not contain scope={}", scope);
+            assert!(
+                result.0.url().query().unwrap().contains(scope),
+                "redirect did not contain scope={}",
+                scope
+            );
         }
     }
 }
