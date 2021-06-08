@@ -202,39 +202,38 @@ impl OAuthClient {
     }
 
     pub fn proxy(&self, session: Option<Session>) -> Result<Access, ClientError> {
-        match session {
-            None => Ok(Access::UnAuthenticated),
-            Some(session) => {
-                match session.data {
-                    SessionType::Tokens(tokens) => {
-                        match tokens.is_access_token_valid() {
-                            Ok(is_valid) => {
-                                match is_valid {
-                                    true => Ok(Access::Allowed(tokens.upstream_headers_tuple())),
-                                    false => {
-                                        // TODO use refresh token if valid
-                                        Ok(Access::Denied(DownStreamResponse::new(
-                                            vec![],
-                                            403,
-                                            "Tokens expired".to_string(),
-                                        )))
-                                    }
-                                }
-                            }
-                            Err(err) => Err(ClientError::new(
-                                500,
-                                format!("Error occurred while getting system time, error={}", err),
-                                None,
-                            )),
-                        }
-                    }
-                    _ => Ok(Access::Denied(DownStreamResponse::new(
-                        vec![],
-                        403,
-                        "UnAuthorized session".to_string(),
-                    ))),
-                }
+        let session = match session {
+            None =>  { return Ok(Access::UnAuthenticated) },
+            Some(session) => session,
+        };
+
+        let tokens = match session.data {
+            SessionType::Tokens(tokens) => tokens,
+            _ => { return Ok(Access::Denied(DownStreamResponse::new(
+                vec![],
+                403,
+                "UnAuthorized session".to_string(),
+                )))
+            },
+        };
+
+        if !tokens.is_access_token_valid().map_err(
+            | err | {
+                ClientError::new(
+                    500,
+                    format!("Error occurred while getting system time, error={}", err),
+                    None,
+                )
             }
+        )? {
+            // TODO use refresh token if valid
+            Ok(Access::Denied(DownStreamResponse::new(
+                vec![],
+                403,
+                "Tokens expired".to_string(),
+            )))
+        } else {
+            Ok(Access::Allowed(tokens.upstream_headers_tuple()))
         }
     }
 
