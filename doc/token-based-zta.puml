@@ -1,0 +1,27 @@
+@startuml component
+actor enduser as "End user"
+participant application as "Application"
+participant idprovider as "Authorization Server\n"
+participant API
+
+
+== Login enduser ==
+group OpenID Connect Login (simplified view)
+enduser -> idprovider: Login as enduser
+idprovider -> application: get token for Application
+note left: {\n sub: "enduser"\n aud: "Application"\n iss: "auth-server\n}
+end
+== Application to API ==
+group Get token for API (OAuth 2.0 Token Exchange)
+application -> idprovider: get token for API based on\nAuthorization Server token
+idprovider -> idprovider: verify token\ncheck access policy:\n can Application invoke API?
+idprovider -> application: issue new token for Application
+note left: {\n sub: "enduser"\n aud: "API"\n iss: "auth-server"\n}
+end
+group Call API with JWT Bearer token
+application -> API: call API with token from Authorization Server
+API -> API: verify token\naccess control (based on enduser)
+API -> application: return information
+application -> enduser: display information
+end
+@enduml

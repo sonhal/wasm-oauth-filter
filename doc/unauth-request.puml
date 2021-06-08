@@ -1,0 +1,84 @@
+@startuml component
+actor enduser as "End user"
+box "Envoy Proxy" #LightBlue
+participant envoy as "Envoy Runtime"
+participant envoyhost as "Envoy WebAssembly Host"
+participant filter as "WebAssembly Filter Module"
+end box
+participant idprovider as "Authorization server"
+
+== Unauthenticated/Unauthorized Request ==
+
+enduser -> envoy: HTTP request\nto upstream application
+envoy -> envoy: Create filter chain\nfor request
+activate envoy
+envoy -> envoyhost
+envoyhost-> filter: proxy_on_context_create(context_id, parent_context_id)
+note left: Call the module to create new \nHTTP Context to filter the request
+activate filter
+envoy -> envoyhost
+envoyhost -> filter: proxy_on_http_request_headers(...)
+filter -> envoyhost: proxy_get_buffer(...) -> call_result
+note right: Fetch HTTP\nrequest headers
+filter -> filter: Parse headers\nand check for active session
+note right: No active session found
+filter -> envoyhost: proxy_set_shared_data(...) -> call_result
+note right: Store new session in cache
+filter -> envoyhost: proxy_send_http_response(...) -> call_result
+note right: Send HTTP response without\nforwarding request upstream
+deactivate filter
+envoyhost -> envoy
+envoy -> enduser: 302 HTTP Redirect /auth
+deactivate envoy
+note right: Redirects End user\nto authorization server
+enduser -> idprovider: GET /auth
+enduser -> idprovider: authenticate
+enduser -> idprovider: authorize filter module
+idprovider --> enduser: 302 Redirect /callback
+note right: Redirect End user back\nto Envoy Proxy
+
+
+enduser -> envoy: GET /callback
+envoy -> envoy: Create filter chain
+activate envoy
+envoy -> envoyhost
+envoyhost -> filter: proxy_on_context_create(context_id, parent_context_id)
+activate filter
+envoy -> envoyhost
+envoyhost -> filter: proxy_on_http_request_headers(...)
+filter -> envoyhost: proxy_get_buffer(...) -> call_result
+note right: Fetch HTTP\nrequest headers
+filter -> filter: Validate parameters in\nthe authorization redirect
+alt Invalid parameters
+    filter -> envoyhost: proxy_send_http_response(...) -> call_result
+    note right: Send Error response\nto end user
+    envoyhost -> envoy
+    envoy -> enduser: HTTP 500
+else Valid parameters
+    filter -> envoyhost: proxy_dispatch_http_call(...) -> call_result
+    note right: Dispatch token request to\nauthorization server
+    envoyhost -> envoy
+    envoy -> idprovider: HTTP POST /token
+    idprovider --> envoy: Token Response
+    envoy -> envoyhost
+    envoyhost -> filter: proxy_on_http_call_response(...)
+    filter -> envoyhost: proxy_get_buffer(...) -> call_result
+    note right: Fetch token response body
+    filter -> filter: Parse token reponse.\nValidate token(s)
+    alt Token(s) invalid
+        filter -> envoyhost: proxy_send_http_response(...) -> call_result
+        note right: Send Error response\nto end user
+        envoyhost -> envoy
+        envoy -> enduser: HTTP 500
+    else Token(s) valid
+        filter -> envoyhost: proxy_set_shared_data(...) -> call_result
+        note right: Store tokens in session cache
+        filter -> envoyhost: proxy_send_http_response(...) -> call_result
+        deactivate filter
+        note right: Redirect end user to\noriginal request url
+        envoyhost -> envoy
+        envoy -> enduser: 302 Redirect
+        deactivate envoy
+    end
+end
+@enduml

@@ -1,0 +1,36 @@
+@startuml component
+actor enduser as "End user"
+box "Envoy Proxy" #LightBlue
+participant envoy as "Envoy Runtime"
+participant envoyhost as "Envoy WebAssembly Host"
+participant filter as "WebAssembly Filter Module"
+end box
+participant api as "Application"
+
+== Authenticated and Authorized Session ==
+
+enduser -> envoy: HTTP request\nto upstream application
+envoy -> envoy: Create filter chain\nfor request
+activate envoy
+envoy -> envoyhost
+envoyhost-> filter: proxy_on_context_create(context_id, parent_context_id)
+note left: Call the module to create new \nHTTP Context to filter the request
+activate filter
+envoy -> envoyhost
+envoyhost -> filter: proxy_on_http_request_headers(...)
+filter -> envoyhost: proxy_get_buffer(...) -> call_result
+note right: Fetch HTTP\nrequest headers
+filter -> filter: Parse headers\nand check for\nactive session
+note right: Active session\nfound in cache
+filter -> envoyhost: proxy_add_map_value(...) -> call_result
+note right: Append access and, if appliable, \nid token to the request headers
+filter --> envoyhost: Continue
+note right: Return continue action to filter chain
+envoyhost --> envoy: Continue
+envoy -> envoy: Run rest of filter chain
+envoy -> api: Proxy request to upstream API
+api --> envoy: Response
+envoy --> enduser: Response
+deactivate envoy
+deactivate filter
+@enduml
