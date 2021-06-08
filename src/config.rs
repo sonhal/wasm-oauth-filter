@@ -1,20 +1,20 @@
 use crate::discovery::ConfigError::BadState;
 use crate::discovery::{JsonWebKeySet, ProviderMetadata};
 use crate::util;
+use jwt_simple;
 use jwt_simple::claims::NoCustomClaims;
-use jwt_simple::prelude::{JWTClaims, RSAPublicKeyLike, VerificationOptions};
+use jwt_simple::prelude::{JWTClaims, RSAPublicKeyLike, UnixTimeStamp, VerificationOptions};
 use jwt_simple::Error;
 use oauth2::basic::{BasicClient, BasicErrorResponse, BasicTokenResponse, BasicTokenType};
 use oauth2::{
     AuthType, AuthUrl, Client, ClientId, ClientSecret, CsrfToken, HttpRequest, PkceCodeChallenge,
     RedirectUrl, Scope, TokenUrl,
 };
-use serde::Deserialize;
+use serde::{Serialize, Deserialize};
 use std::collections::HashSet;
 use std::fmt::Debug;
 use time::Duration;
 use url::Url;
-
 
 #[derive(Clone, Debug)]
 pub struct FilterConfig {
@@ -134,10 +134,7 @@ impl FilterConfig {
         }
     }
 
-    pub fn authorization_url(
-        &self,
-        pkce_challenge: PkceCodeChallenge,
-    ) -> (Url, CsrfToken) {
+    pub fn authorization_url(&self, pkce_challenge: PkceCodeChallenge) -> (Url, CsrfToken) {
         let builder = self.client();
         let mut builder = builder
             .authorize_url(|| CsrfToken::new(util::new_random_verifier(32).secret().to_string()))
@@ -182,6 +179,7 @@ impl FilterConfig {
         )
     }
 
+    // Validates a OpenID Connect ID token
     pub fn validate_token(&self, token: &str) -> Result<(), Error> {
         let allowed_issuers: HashSet<String> =
             vec![&self.issuer].iter().map(|s| s.to_string()).collect();
@@ -202,7 +200,23 @@ impl FilterConfig {
             time_tolerance: None,
             max_validity: None,
         };
-        let _ = self.extra.validate_id_token(token, Some(option))?;
+        let claims = self.extra.validate_id_token(token, Some(option))?;
+        if let Some(jwt_simple::prelude::Audiences::AsSet(aud)) = claims.audiences {
+            // More than once one audience in token
+            if aud.len() > 1 {
+                // if azp claim is present, client id should be in azp field
+                match claims.custom.azp {
+                    None => {
+                        return Err(jwt_simple::Error::msg("azp field required"))
+                    }
+                    Some(azp) => {
+                        if azp != self.client_id {
+                            return Err(jwt_simple::Error::msg("azp is not valid"))
+                        }
+                    }
+                }
+            }
+        }
         Ok(())
     }
 
@@ -237,7 +251,6 @@ impl FilterConfig {
     }
 }
 
-
 #[derive(Clone, Debug)]
 pub enum ExtraConfig {
     BasicOAuth,
@@ -254,11 +267,11 @@ impl ExtraConfig {
         token: &str,
         jwks: &JsonWebKeySet,
         options: Option<VerificationOptions>,
-    ) -> Result<JWTClaims<NoCustomClaims>, Error> {
+    ) -> Result<JWTClaims<OIDCClaims>, Error> {
         log::debug!("validating id token = {}", token);
         let mut errors = vec![];
         for key in jwks.keys().iter() {
-            match key.verify_token::<NoCustomClaims>(token, options.clone()) {
+            match key.verify_token::<OIDCClaims>(token, options.clone()) {
                 Ok(claims) => return Ok(claims),
                 Err(error) => errors.push(error),
             }
@@ -271,7 +284,7 @@ impl ExtraConfig {
         &self,
         token: &str,
         options: Option<VerificationOptions>,
-    ) -> Result<JWTClaims<NoCustomClaims>, Error> {
+    ) -> Result<JWTClaims<OIDCClaims>, Error> {
         match self {
             ExtraConfig::BasicOAuth => Err(Error::new(BadState(
                 "Asked to validate ID token, but configured for OAuth".to_string(),
@@ -381,6 +394,12 @@ fn default_extra_params() -> Vec<(String, String)> {
 
 fn default_cookie_expire() -> u64 {
     3600
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct OIDCClaims {
+    pub azp: Option<String>,
+    pub acr: Option<String>,
 }
 
 #[cfg(test)]

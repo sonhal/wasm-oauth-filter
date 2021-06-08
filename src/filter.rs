@@ -150,7 +150,7 @@ enum FilterAction {
 }
 
 // Implement http functions related to this request.
-// This is the core of the filter code.
+// This is the core of the filter request handling.
 impl HttpContext for OAuthFilter {
     // This callback will be invoked when request headers arrive
     fn on_http_request_headers(&mut self, _: usize) -> Action {
@@ -177,7 +177,11 @@ impl HttpContext for OAuthFilter {
                     ) {
                         Ok(_) => {}
                         Err(error) => {
-                            log::error!("Failed to dispatch token request to cluster = {} Envoy status = {:?}", self.config.auth_cluster(), error)
+                            log::error!(
+                                "Failed to dispatch token request to cluster = {}\
+                                 Envoy status = {:?}",
+                                self.config.auth_cluster(),
+                                error)
                         }
                     }
                     Action::Pause
@@ -294,20 +298,21 @@ impl Context for OAuthRootContext {
                 Err(err) => {
                     log::error!("ERROR parsing ProviderMetadata = {}", err);
                     panic!("Invalid ProviderMetadata response") // Crash hard here as we cannot serve requests
-                },
+                }
                 Ok(provider_metadata) => {
                     self.provider_metadata = Some(provider_metadata);
-                    let request = discovery::jwks_request(self.provider_metadata.clone().unwrap().jwks_url());
+                    let request =
+                        discovery::jwks_request(self.provider_metadata.clone().unwrap().jwks_url());
                     match self.dispatch(request) {
                         Ok(_) => {
                             log::debug!("successfully dispatched JWKS request")
-                        },
+                        }
                         Err(err) => {
                             log::error!("Failed to JWKS request, Envoy status = {:?}", err)
-                        },
+                        }
                     }
                     log::debug!("Provider Metadata configured: {:?}", self.provider_metadata)
-                },
+                }
             }
             return;
         }
@@ -327,7 +332,6 @@ impl Context for OAuthRootContext {
 }
 
 impl RootContext for OAuthRootContext {
-
     // handles receiving of configuration data when filter is instantiated
     fn on_configure(&mut self, _plugin_configuration_size: usize) -> bool {
         let config_buffer = match self.get_configuration() {

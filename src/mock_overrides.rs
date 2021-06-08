@@ -1,4 +1,3 @@
-
 /// Test stubs
 /// Implements the external function that is supplied by the WebAssembly host at startup
 /// When compiling and running as x86_64 these external functions are not available and the program crashes
@@ -6,7 +5,7 @@
 #[cfg(test)]
 #[allow(unused)]
 pub mod overrides {
-    use proxy_wasm::types::{Status, MapType, BufferType};
+    use proxy_wasm::types::{BufferType, MapType, Status};
 
     #[no_mangle]
     pub extern "C" fn proxy_done() -> Status {
@@ -111,5 +110,4 @@ pub mod overrides {
     pub extern "C" fn proxy_get_current_time_nanoseconds(return_time: *mut u64) -> Status {
         Status::Ok
     }
-
 }

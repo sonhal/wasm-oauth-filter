@@ -1,8 +1,7 @@
-use std::collections::HashMap;
+use crate::session::{Session, SessionCache, SessionUpdate};
 use proxy_wasm::traits::Context;
-use serde::{Serialize, Deserialize};
-use crate::session::{SessionCache, SessionUpdate, Session};
-
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct SharedCache {
@@ -12,14 +11,13 @@ pub struct SharedCache {
 const SHARED_SESSIONS_KEY: &str = "SHARED_SESSIONS";
 
 impl SharedCache {
-
     pub fn new() -> SharedCache {
         SharedCache {
-            sessions: HashMap::new()
+            sessions: HashMap::new(),
         }
     }
 
-    pub fn from_host(context: & dyn Context) -> Result<SharedCache, String> {
+    pub fn from_host(context: &dyn Context) -> Result<SharedCache, String> {
         let (bytes, size) = context.get_shared_data(SHARED_SESSIONS_KEY);
         if let (Some(bytes), Some(_)) = (bytes, size) {
             let cache: SharedCache = serde_json::from_slice(bytes.as_slice()).unwrap();
@@ -29,17 +27,24 @@ impl SharedCache {
         }
     }
 
-    pub fn store(&mut self, context: & dyn Context) -> Result<(), String> {
+    pub fn store(&mut self, context: &dyn Context) -> Result<(), String> {
         let serialized = serde_json::to_string(self);
         match serialized {
             Ok(serialized) => {
-                let result = context.set_shared_data(SHARED_SESSIONS_KEY, Some(&serialized.as_bytes()), None);
+                let result = context.set_shared_data(
+                    SHARED_SESSIONS_KEY,
+                    Some(&serialized.as_bytes()),
+                    None,
+                );
                 match result {
                     Ok(_) => Ok(()),
-                    Err(status) => Err(format!("Error from host when attempting to set shared data, status={:?}", status))
+                    Err(status) => Err(format!(
+                        "Error from host when attempting to set shared data, status={:?}",
+                        status
+                    )),
                 }
             }
-            Err(error) => Err(error.to_string())
+            Err(error) => Err(error.to_string()),
         }
     }
 }
@@ -50,16 +55,17 @@ impl SessionCache for SharedCache {
     }
 
     fn set(&mut self, update: SessionUpdate) {
-        self.sessions.insert(update.id.clone(), update.create_session());
+        self.sessions
+            .insert(update.id.clone(), update.create_session());
     }
 }
 
 #[cfg(test)]
 mod tests {
     use crate::cache::SharedCache;
+    use crate::session::{SessionCache, SessionType, SessionUpdate};
     use proxy_wasm::traits::Context;
-    use proxy_wasm::types::{Status, Bytes};
-    use crate::session::{SessionCache, SessionUpdate, SessionType};
+    use proxy_wasm::types::{Bytes, Status};
 
     struct TestContext {
         data: Vec<u8>,
@@ -67,7 +73,7 @@ mod tests {
 
     impl Context for TestContext {
         fn get_shared_data(&self, key: &str) -> (Option<Bytes>, Option<u32>) {
-            (Some(self.data.clone()),  Some(self.data.len() as u32))
+            (Some(self.data.clone()), Some(self.data.len() as u32))
         }
 
         fn set_shared_data(
@@ -88,7 +94,7 @@ mod tests {
         let test_update = SessionUpdate::auth_request(
             "https://proxy/resource".to_string(),
             "abc".to_string(),
-            "123".to_string()
+            "123".to_string(),
         );
 
         let test_id = test_update.id.clone();
@@ -101,16 +107,12 @@ mod tests {
         let session = new_cache.get(&test_id);
         if let Some(session) = session {
             match session.data {
-                SessionType::AuthorizationRequest(verifiers) => {
-
-                }
+                SessionType::AuthorizationRequest(verifiers) => {}
                 SessionType::Tokens(_) => panic!(),
                 SessionType::Empty => panic!(),
             }
         } else {
             panic!("Bad deserialization")
         }
-
     }
-
 }

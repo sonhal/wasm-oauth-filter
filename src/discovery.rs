@@ -1,11 +1,11 @@
+use crate::messages::{HttpRequest, HttpResponse};
+use jsonwebkey::{JsonWebKey, Key};
+use jwt_simple::prelude::RS256PublicKey;
+use oauth2::http::header::ACCEPT;
+use oauth2::http::{Method, StatusCode};
 use serde::{Deserialize, Serialize};
 use std::{error, fmt};
 use url::{ParseError, Url};
-use jwt_simple::prelude::RS256PublicKey;
-use jsonwebkey::{JsonWebKey, Key};
-use crate::messages::{HttpRequest, HttpResponse};
-use oauth2::http::{Method, StatusCode};
-use oauth2::http::header::ACCEPT;
 
 pub const MIME_TYPE_JSON: &str = "application/json";
 pub const MIME_TYPE_JWKS: &str = "application/jwk-set+json";
@@ -18,14 +18,15 @@ pub enum ConfigError {
     Response(u32, String),
     Parse(String),
     Validation(String),
-    BadState(String)
+    BadState(String),
 }
 
 impl fmt::Display for ConfigError {
-
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         match self {
-            ConfigError::Response(status, msg) => write!(f, "Response error status={} msg={}", status, msg),
+            ConfigError::Response(status, msg) => {
+                write!(f, "Response error status={} msg={}", status, msg)
+            }
             ConfigError::Parse(msg) => write!(f, "Parse error = {}", msg),
             ConfigError::Validation(msg) => write!(f, "Validation error = {}", msg),
             ConfigError::BadState(msg) => write!(f, "Bad state error = {}", msg),
@@ -52,7 +53,6 @@ pub struct ProviderMetadata {
 }
 
 impl ProviderMetadata {
-
     pub fn new(
         issuer: Url,
         authorization_endpoint: Url,
@@ -73,15 +73,13 @@ impl ProviderMetadata {
             scopes_supported,
             response_types_supported,
             subject_types_supported,
-            id_token_signing_alg_values_supported
+            id_token_signing_alg_values_supported,
         }
     }
 
     pub fn from_bytes(bytes: &Vec<u8>) -> Result<ProviderMetadata, ConfigError> {
         serde_json::from_slice::<ProviderMetadata>(bytes.as_slice())
-            .map_err(|err| {
-                ConfigError::Parse(err.to_string())
-            })
+            .map_err(|err| ConfigError::Parse(err.to_string()))
     }
 
     pub fn issuer(&self) -> &Url {
@@ -146,43 +144,38 @@ pub fn discovery_response(
     }
 }
 
-
 #[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
-pub struct JsonWebKeySet
-{
+pub struct JsonWebKeySet {
     keys: Vec<JsonWebKey>,
 }
 
 impl JsonWebKeySet {
-
     pub fn new(keys: Vec<JsonWebKey>) -> JsonWebKeySet {
-        JsonWebKeySet {
-            keys
-        }
+        JsonWebKeySet { keys }
     }
 
     pub fn from_bytes(bytes: Vec<u8>) -> Result<JsonWebKeySet, ConfigError> {
         serde_json::from_slice::<JsonWebKeySet>(bytes.as_slice())
-            .map_err(|err| {
-                ConfigError::Parse(err.to_string())
-            })
+            .map_err(|err| ConfigError::Parse(err.to_string()))
     }
 
     pub fn keys(&self) -> Vec<RS256PublicKey> {
-        self.keys.iter().filter_map(
-            |key| {
+        self.keys
+            .iter()
+            .filter_map(|key| {
                 if let Key::RSA { public, private } = &*key.key {
                     let ser_e = serde_json::to_string(&public.e).unwrap();
                     let ser_e = ser_e.strip_prefix("\"").unwrap().to_string();
-                    let ser_e= ser_e.strip_suffix("\"").unwrap().to_string();
+                    let ser_e = ser_e.strip_suffix("\"").unwrap().to_string();
                     let ser_e = base64::decode(ser_e).unwrap();
                     Some(RS256PublicKey::from_components(&public.n, ser_e.as_slice()).unwrap())
-                } else { None }
-            }
-        ).collect()
+                } else {
+                    None
+                }
+            })
+            .collect()
     }
 }
-
 
 pub fn jwks_response(response: HttpResponse) -> Result<JsonWebKeySet, ConfigError> {
     if response.status_code != StatusCode::OK {
@@ -193,16 +186,17 @@ pub fn jwks_response(response: HttpResponse) -> Result<JsonWebKeySet, ConfigErro
     }
 
     serde_json::from_slice::<JsonWebKeySet>(&response.body)
-            .map_err(|err| { ConfigError::Parse(err.to_string())})
-
+        .map_err(|err| ConfigError::Parse(err.to_string()))
 }
 
 #[cfg(test)]
 mod tests {
     use crate::discovery;
-    use jsonwebkey::Key;
-    use jwt_simple::prelude::{RSAPublicKey, NoCustomClaims, RSAPublicKeyLike, VerificationOptions, Duration, Audiences};
     use crate::messages::HttpResponse;
+    use jsonwebkey::Key;
+    use jwt_simple::prelude::{
+        Audiences, Duration, NoCustomClaims, RSAPublicKey, RSAPublicKeyLike, VerificationOptions,
+    };
     use oauth2::http::StatusCode;
     use std::collections::HashSet;
 
@@ -257,9 +251,7 @@ mod tests {
             body,
         };
 
-        let result = discovery::jwks_response(
-            response,
-        );
+        let result = discovery::jwks_response(response);
         assert!(result.is_ok());
         let key = result.unwrap().keys.pop().unwrap().key;
         match *key {
@@ -267,7 +259,7 @@ mod tests {
             Key::RSA { public, private } => {
                 let ser_e = serde_json::to_string(&public.e).unwrap();
                 let ser_e = ser_e.strip_prefix("\"").unwrap().to_string();
-                let ser_e= ser_e.strip_suffix("\"").unwrap().to_string();
+                let ser_e = ser_e.strip_suffix("\"").unwrap().to_string();
                 let ser_e = base64::decode(ser_e).unwrap();
                 let public_key = RSAPublicKey::from_components(&public.n, ser_e.as_slice());
                 assert!(public_key.is_ok());
@@ -296,9 +288,7 @@ mod tests {
             body,
         };
 
-        let result = discovery::jwks_response(
-            response,
-        ).unwrap();
+        let result = discovery::jwks_response(response).unwrap();
 
         let keys = result.keys();
         let key = &keys[0];
@@ -310,15 +300,14 @@ mod tests {
             required_public_key: None,
             required_nonce: None,
             allowed_issuers: None,
-            allowed_audiences: Some(HashSet::from(Audiences::AsString("aud-token-tester".to_string()))),
+            allowed_audiences: Some(HashSet::from(Audiences::AsString(
+                "aud-token-tester".to_string(),
+            ))),
             time_tolerance: Some(Duration::from_days(10_000)), // TODO, will fail someday in the future :P
-            max_validity: None};
-        let claims = key.verify_token::<NoCustomClaims>(
-            RAW_ID_TOKEN,
-            Some(options)
-
-        ).unwrap();
-
+            max_validity: None,
+        };
+        let claims = key
+            .verify_token::<NoCustomClaims>(RAW_ID_TOKEN, Some(options))
+            .unwrap();
     }
-
 }
