@@ -1,28 +1,30 @@
-mod cache;
-mod config;
-mod discovery;
-mod messages;
-pub mod mock_overrides;
-mod oauth_client;
-mod oauth_client_types;
-mod session;
-mod util;
+use std::cell::RefCell;
+use std::ops::Deref;
+use std::option::Option::Some;
+use std::time::Duration;
+
+use proxy_wasm::traits::{Context, HttpContext, RootContext};
+use proxy_wasm::types::{Action, ContextType, LogLevel, Status};
+use url;
+use url::{ParseError, Url};
+
+use oauth_client::types::{Access, ClientError, Redirect, Request, TokenRequest};
 
 use crate::cache::SharedCache;
 use crate::config::{FilterConfig, RawFilterConfig};
 use crate::discovery::{ConfigError, JsonWebKeySet, ProviderMetadata};
 use crate::messages::{DownStreamResponse, ErrorBody, HttpRequest, TokenResponse};
 use crate::oauth_client::{CALLBACK_PATH, SIGN_OUT_PATH, START_PATH};
-use crate::oauth_client_types::{Access, ClientError, Redirect, Request, TokenRequest};
 use crate::session::SessionCache;
-use proxy_wasm::traits::{Context, HttpContext, RootContext};
-use proxy_wasm::types::{Action, ContextType, LogLevel, Status};
-use std::cell::RefCell;
-use std::ops::Deref;
-use std::option::Option::Some;
-use std::time::Duration;
-use url;
-use url::{ParseError, Url};
+
+mod cache;
+mod config;
+mod discovery;
+mod messages;
+pub mod mock_overrides;
+mod oauth_client;
+mod session;
+mod util;
 
 #[cfg(not(test))]
 #[no_mangle]
@@ -108,7 +110,7 @@ impl OAuthFilter {
     // Call the client by right method depending on the request path
     fn endpoint(
         &self,
-        request: crate::oauth_client_types::Request,
+        request: oauth_client::types::Request,
         session: Option<crate::session::Session>,
     ) -> Result<FilterAction, ClientError> {
         let mut cache = self.cache.borrow_mut();

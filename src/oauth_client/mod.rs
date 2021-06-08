@@ -1,16 +1,18 @@
 use std::any::Any;
+use std::option::Option::Some;
 
-use oauth2::basic::BasicClient;
 use oauth2::{ClientId, ClientSecret, HttpRequest, PkceCodeChallenge};
+use oauth2::basic::BasicClient;
 use time::Duration;
 use url::{ParseError, Url};
 
 use crate::config::FilterConfig;
 use crate::messages::{DownStreamResponse, TokenResponse};
-use crate::oauth_client_types::{Access, ClientError, Redirect, Request, TokenRequest};
 use crate::session::{Session, SessionType, SessionUpdate};
 use crate::util;
-use std::option::Option::Some;
+use crate::oauth_client::types::{ClientError, Request, Redirect, TokenRequest, Access};
+
+pub mod types;
 
 pub static CALLBACK_PATH: &str = "/callback";
 pub static START_PATH: &str = "/auth";
@@ -297,17 +299,17 @@ mod tests {
     use std::matches;
     use std::time::SystemTime;
 
+    use jsonwebkey::{ByteVec, Key, PublicExponent, RsaPublic};
+    use jwt_simple::claims::JWTClaims;
+    use jwt_simple::prelude::{Claims, HashSet, RS256KeyPair, RSAKeyPairLike};
     use oauth2::http::header::SET_COOKIE;
 
+    use crate::config::{FilterConfig, OIDCClaims};
+    use crate::discovery::{JsonWebKeySet, ProviderMetadata};
     use crate::messages::{SuccessfulResponse, TokenResponse};
     use crate::session::{Session, SessionType};
 
     use super::*;
-    use crate::config::{FilterConfig, OIDCClaims};
-    use crate::discovery::{JsonWebKeySet, ProviderMetadata};
-    use jsonwebkey::{ByteVec, Key, PublicExponent, RsaPublic};
-    use jwt_simple::claims::JWTClaims;
-    use jwt_simple::prelude::{Claims, RS256KeyPair, RSAKeyPairLike, HashSet};
 
     fn test_config_extra(scopes: Vec<String>) -> FilterConfig {
         FilterConfig::oauth(
