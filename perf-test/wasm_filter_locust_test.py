@@ -5,17 +5,18 @@ user_counter = 1
 
 
 class OIDCPerformanceTest(HttpUser):
-    wait_time = between(1, 2.5)
+    wait_time = between(1, 1.5)
 
     def __init__(self, *args, **kwargs):
         self.ready = False
+        self.host = "http://localhost:8090/"
         super().__init__(*args, **kwargs)
 
     @task
     def get_resource(self):
         if self.ready:
             with self.client.get(
-                    url="http://localhost:8090/safe",
+                    url="http://localhost:8090/anything",
                     auth=None,
                     allow_redirects=False,
                     cookies=self.cookies,

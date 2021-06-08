@@ -1,1 +1,7 @@
 locust
+pandas
+jupyter
+matplotlib
+altair
+altair_saver
+selenium
