@@ -51,19 +51,6 @@ services:
       JSON_CONFIG_PATH: "/var/mock-auth2-config.json"
     volumes:
       - ./mock-auth2-config.json:/var/mock-auth2-config.json
-  token-tester:
-    image: ghcr.io/sonhal/token-tester:latest
-    ports:
-      - 8080:8080
-    environment:
-      PORT: 8080
-      ISSUER_NAME: http://mock-oauth2-server:8080/customiss
-      OIDC_DISCOVERY_URL: http://mock-oauth2-server:8080/customiss/.well-known/openid-configuration
-      OIDC_ACCEPTED_AUDIENCE: mycoolclient
-      JWKS_URI: http://mock-oauth2-server:8080/customiss/jwks
-    restart: always
-    depends_on:
-      - mock-oauth2-server
   bin:
     image: kennethreitz/httpbin
 

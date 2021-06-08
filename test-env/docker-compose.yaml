@@ -20,7 +20,7 @@ services:
   token-tester:
     image: ghcr.io/sonhal/token-tester:latest
     ports:
-      - 8080:8080
+      - 8088:8080
     environment:
       PORT: 8080
       ISSUER_NAME: http://mock-oauth2-server:8080/customiss

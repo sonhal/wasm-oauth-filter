@@ -47,8 +47,7 @@ static_resources:
                               "client_id": "mycoolclientid",
                               "client_secret": "mycoolclientsecret",
                               "scopes": ["openid", "email", "profile"],
-                              "cookie_expire": 120,
-                              "oidc_issuer_url": "http://mock-oauth2-server:8080/customiss/"
+                              "cookie_expire": 120
                             }
                         vm_config:
                           runtime: "envoy.wasm.runtime.v8"

@@ -47,7 +47,7 @@ static_resources:
                               "client_id": "mycoolclientid",
                               "client_secret": "mycoolclientsecret",
                               "scopes": ["openid", "email", "profile"],
-                              "cookie_expire": 120,
+                              "cookie_expire": 3600,
                               "oidc_issuer_url": "http://mock-oauth2-server:8080/customiss/"
                             }
                         vm_config:
@@ -82,5 +82,5 @@ static_resources:
               - endpoint:
                   address:
                     socket_address:
-                      address: token-tester
-                      port_value: 8080
+                      address: bin
+                      port_value: 80
