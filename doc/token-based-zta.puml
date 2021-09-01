@@ -8,7 +8,7 @@ participant API
 == Login enduser ==
 group OpenID Connect Login (simplified view)
 enduser -> idprovider: Login as enduser
-idprovider -> application: get token for Application
+idprovider -> application: return tokens for Application
 note left: {\n sub: "enduser"\n aud: "Application"\n iss: "auth-server\n}
 end
 == Application to API ==

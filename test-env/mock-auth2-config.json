@@ -15,7 +15,7 @@
               "aud-token-tester", "mycoolclientid"
             ],
             "azp": "mycoolclientid",
-            "iss": "http://mock-oauth2-server:8080/customiss"
+            "iss": "http://mock-oauth2-server:8080/customiss/"
           }
         }
       ]

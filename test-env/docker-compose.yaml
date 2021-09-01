@@ -9,6 +9,9 @@ services:
     ports:
       - 8090:10000
       - 19901:9901
+    depends_on:
+      - mock-oauth2-server
+
   mock-oauth2-server:
     image: docker.pkg.github.com/navikt/mock-oauth2-server/mock-oauth2-server:0.3.2
     ports:
@@ -23,7 +26,7 @@ services:
       - 8088:8080
     environment:
       PORT: 8080
-      ISSUER_NAME: http://mock-oauth2-server:8080/customiss
+      ISSUER_NAME: http://mock-oauth2-server:8080/customiss/
       OIDC_DISCOVERY_URL: http://mock-oauth2-server:8080/customiss/.well-known/openid-configuration
       OIDC_ACCEPTED_AUDIENCE: aud-token-tester
       JWKS_URI: http://mock-oauth2-server:8080/customiss/jwks

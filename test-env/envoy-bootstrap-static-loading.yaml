@@ -41,13 +41,14 @@ static_resources:
                             {
                               "redirect_uri": "http://localhost:8090/callback",
                               "auth_cluster": "cluster_mock_auth",
-                              "issuer": "http://mock-oauth2-server:8080/customiss",
+                              "issuer": "http://mock-oauth2-server:8080/customiss/",
                               "token_uri": "http://mock-oauth2-server:8888/customiss/token",
                               "auth_uri": "http://localhost:8888/customiss/authorize",
                               "client_id": "mycoolclientid",
                               "client_secret": "mycoolclientsecret",
                               "scopes": ["openid", "email", "profile"],
-                              "cookie_expire": 120
+                              "cookie_expire": 3600,
+                              "oidc_issuer_url": "http://mock-oauth2-server:8080/customiss/"
                             }
                         vm_config:
                           runtime: "envoy.wasm.runtime.v8"
